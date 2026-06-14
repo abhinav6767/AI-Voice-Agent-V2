@@ -197,6 +197,10 @@ def stream_output(pipe, log_file, prefix):
 # =============================================================================
 
 def main():
+    # Reconfigure stdout to support printing utf-8 characters (like Hindi) without crashing the console
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+
     mode = sys.argv[1] if len(sys.argv) > 1 else "dev"
     cwd = Path(__file__).parent
 
@@ -228,6 +232,10 @@ def main():
         prefix_ansi = f"{color}{BOLD}[{name.upper()}]{RESET}"
         prefix_plain = f"[{name.upper()}]"
         log(color, name.upper(), f"Spawning {script} ...")
+        
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+
         proc = subprocess.Popen(
             [sys.executable, script, mode],
             cwd=str(cwd),
@@ -235,6 +243,8 @@ def main():
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            encoding="utf-8",
+            env=env
         )
         processes[name] = proc
         log(color, name.upper(), f"Started -> PID {proc.pid}")

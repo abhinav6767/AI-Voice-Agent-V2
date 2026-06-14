@@ -265,7 +265,7 @@ STT_LANGUAGE = "auto"
 
 # --- 3. TEXT-TO-SPEECH (TTS) SETTINGS ---
 DEFAULT_TTS_PROVIDER = "sarvam"
-DEFAULT_TTS_VOICE = "anushka"
+DEFAULT_TTS_VOICE = "ishita"  # Sarvam (bulbul:v3) valid female voice
 
 # Sarvam AI Specifics
 SARVAM_MODEL = "bulbul:v3"

@@ -85,6 +85,39 @@
 
 ## 🪵 Immutable Change Log
 
+### [2026-06-14] - Voice Preview Button + Language Support Chips in Dashboard
+* **Context:** User requested ability to audition each TTS voice before saving, and to see which languages a voice supports.
+* **Scope:**
+  - `dashboard/app/api/voice-preview/route.ts` [NEW] — GET endpoint that calls Sarvam/Deepgram/Cartesia/OpenAI TTS APIs with a short sample sentence and returns the audio bytes. Supports per-language sample texts (hi-IN, ta-IN, te-IN, kn-IN, ml-IN, mr-IN, gu-IN, bn-IN, pa-IN, en-IN, en-US). 12s timeout with proper error responses.
+  - `dashboard/components/AgentConfigForm.tsx` — Voice column now has: (1) `▶ Preview` button that fetches live TTS audio and plays it in-browser, transitions to `⏹ Stop` while playing; (2) language chips row showing which languages the selected voice/provider supports, auto-computed per provider.
+* **Impact:** Users can instantly hear any voice without making a call. Language chips show "Hindi, Tamil, Telugu, …" for Sarvam or "English (US)" for Deepgram etc.
+
+### [2026-06-14] - Add Google Gemini LLM Support + Fix OpenAI Fallback Crash
+* **Context:** Agent crashed with `OpenAIError: OPENAI_API_KEY not set` because `_build_llm()` blindly fell back to `openai.LLM()` when the provider wasn't "groq". User has Gemini key but no OpenAI key.
+* **Scope:**
+  - `agent_outbound.py` + `agent_inbound.py` — Rewrote `_build_llm()`: added Google/Gemini support via `livekit-plugins-google`, added guarded OpenAI path (only used if `OPENAI_API_KEY` is set), changed final fallback from bare `openai.LLM()` to safe Groq fallback. Added `try/except ImportError` for Google plugin to avoid hard failure.
+  - `agent_inbound.py` — Also fixed `_build_tts()` stale Sarvam voice list (same fix as outbound).
+  - `requirements.txt` — Added `livekit-plugins-google>=0.6.0`.
+  - `.env` — Added `GEMINI_MODEL=gemini-2.0-flash`, reorganized Gemini section with comment.
+* **Impact:** Agents no longer crash when OpenAI key is absent. Google Gemini is now a selectable LLM provider from the dashboard. Groq is always the safe last-resort fallback.
+
+### [2026-06-14] - Fix Sarvam bulbul:v3 Incompatible Speaker Crash
+* **Context:** Outbound agent crashed on every call with `ValueError: Speaker 'aravind' is not compatible with model 'bulbul:v3'`. Sarvam updated `bulbul:v3` to a new speaker list that dropped `anushka`, `aravind`, `amartya`, `dhruv`, `meera`, `pavithra`, `maitreyi`, `arvind`, `arjun`, `abhilash`.
+* **Valid bulbul:v3 speakers:** shubh, ritu, rahul, pooja, simran, kavya, amit, ratan, rohan, dev, ishita, shreya, manan, sumit, priya, aditya, kabir, neha, varun, roopa, aayan, ashutosh, advait, amelia, sophia.
+* **Scope:**
+  - `config_outbound.py` — Updated `DEFAULT_TTS_VOICE` from `"aravind"` → `"rahul"`. Updated `fetch_sarvam_voices()` fallback list to only valid bulbul:v3 speakers.
+  - `config_inbound.py` — Updated `DEFAULT_TTS_VOICE` from `"anushka"` → `"ishita"`.
+  - `agent_outbound.py` — Replaced hardcoded old-voice list in `_build_tts()` with the full valid bulbul:v3 speaker set.
+  - `dashboard/lib/providers.ts` — Replaced Sarvam FALLBACK_CATALOG voices with all 25 valid bulbul:v3 speakers.
+  - `data/agent_config.json` — Patched saved dashboard config: outbound `aravind` → `rahul`, inbound `anushka` → `ishita`.
+* **Impact:** Outbound and inbound agents will no longer crash on startup due to invalid speaker selection. Dashboard voice dropdowns now only show valid voices.
+
+### [2026-06-14] - Fix React Duplicate Key Error in Select Component
+* **Context:** Next.js console threw errors stating "Encountered two children with the same key, '2-finance'" (and '2-meeting') when rendering AgentConfigForm. This occurred because live provider API results returned duplicate entries in the model list.
+* **Scope:**
+  - Added value deduplication to the `Select` component in `dashboard/components/AgentConfigForm.tsx` to filter out duplicate option values before rendering.
+* **Impact:** Resolved React rendering warnings/errors, ensuring dropdown selections remain clean and unique.
+
 ### [2026-06-13] - Fix Sarvam TTS Model Version Compatibility Crash
 * **Context:** The outbound agent crashed during call setup when `aravind` was selected as the speaker because the root `.env` hardcoded `SARVAM_TTS_MODEL=bulbul:v2`, which is incompatible with `aravind`.
 * **Scope:**
@@ -171,4 +204,12 @@
   - UPDATED `config_inbound.py` — imports helpers from `config_outbound` (single source of truth).
 * **Impact:** No hardcoded voice/model lists anywhere. Live data from provider APIs at startup and on page load.
 
-
+### [2026-06-14] - Interactive TTS Language Chips & Override Fix
+* **Context:** The UI language chips were static, and when a user did initiate a call with a non-English language (like Hindi), the outbound agent ignored the language and spoke English, causing the terminal to crash due to a Unicode encoding issue when printing Hindi characters.
+* **Scope:**
+  - Upgraded language chips in `AgentConfigForm.tsx`, `CallDispatcher.tsx`, and `BulkDialer.tsx` to be fully interactive (clickable), reactive, and self-sorting based on the selected active language.
+  - Fixed `/api/dispatch` to correctly pack `tts_provider` and `tts_language` into the LiveKit dispatch metadata.
+  - Upgraded `agent_outbound.py`'s `_build_tts()` function to accept dynamic language overrides from the job metadata instead of falling back to default.
+  - Modified `OutboundAssistant` (LLM Agent) to dynamically inject a critical system prompt forcing it to speak the specified target language instead of English.
+  - Upgraded `run.py` to enforce `utf-8` on `sys.stdout` and `PYTHONIOENCODING` to prevent `UnicodeEncodeError: 'charmap' codec can't encode characters` crashes when the backend logs Hindi/non-English text.
+* **Impact:** Users can seamlessly initiate outbound calls in any supported language with a single click, and the AI will reliably converse in that language without crashing the backend process.

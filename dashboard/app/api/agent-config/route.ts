@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
     // Sync Python code via the master sync script
     try {
       const { execSync } = require("child_process");
-      execSync("python sync_configs.py", { cwd: join(process.cwd(), "..") });
+      execSync("python sync_configs.py", { cwd: path.join(process.cwd(), "..") });
       console.log(`[SYNC] Python config synced for ${mode}`);
     } catch (err) {
       console.error("Failed to sync Python file:", err);

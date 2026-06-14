@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from 'react';
-import { Users, Upload, Play, Loader2, Server } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Users, Upload, Play, Loader2, RefreshCw, ChevronDown, StopCircle, Globe } from 'lucide-react';
+import type { ProviderCatalog, VoiceOption, ModelOption } from '@/lib/providers';
+import { FALLBACK_CATALOG, STT_LANGUAGES } from '@/lib/providers';
 
 export default function BulkDialer() {
     const [file, setFile] = useState<File | null>(null);
@@ -10,22 +12,94 @@ export default function BulkDialer() {
     const [progress, setProgress] = useState({ total: 0, current: 0 });
     const [message, setMessage] = useState('');
     
-    // Add state for dynamic defaults
-    const [defaultModel, setDefaultModel] = useState('groq');
-    const [defaultVoice, setDefaultVoice] = useState('alloy');
+    // Dynamic catalog & state
+    const [catalog, setCatalog] = useState<ProviderCatalog>(FALLBACK_CATALOG);
+    const [catalogLoading, setCatalogLoading] = useState(true);
+    const [liveStatus, setLiveStatus] = useState<Record<string, boolean>>({});
+
+    const [selectedProvider, setSelectedProvider] = useState('groq');
+    const [selectedVoice, setSelectedVoice] = useState('aravind');
+    const [selectedTtsProvider, setSelectedTtsProvider] = useState('sarvam');
+    const [selectedLanguage, setSelectedLanguage] = useState('en-IN');
+
+    // Voice preview state
+    const [previewState, setPreviewState] = useState<"idle" | "loading" | "playing">("idle");
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    const loadCatalog = async () => {
+        setCatalogLoading(true);
+        try {
+            const res = await fetch('/api/providers');
+            if (!res.ok) throw new Error('Failed');
+            const data = await res.json();
+            setCatalog(data.catalog);
+            setLiveStatus(data.live_fetched ?? {});
+        } catch {
+            // Keep fallback
+        } finally {
+            setCatalogLoading(false);
+        }
+    };
     
-    // Fetch defaults from config
     useEffect(() => {
-        fetch('/api/agent-config?mode=outbound')
-            .then(res => res.json())
-            .then(data => {
-                if (data?.config) {
-                    if (data.config.llm_provider) setDefaultModel(data.config.llm_provider);
-                    if (data.config.tts_voice) setDefaultVoice(data.config.tts_voice);
-                }
-            })
-            .catch(console.error);
+        Promise.all([
+            fetch('/api/agent-config?mode=outbound').then(r => r.json()).catch(() => null),
+            loadCatalog(),
+        ]).then(([configData]) => {
+            if (configData?.config) {
+                if (configData.config.llm_provider) setSelectedProvider(configData.config.llm_provider);
+                if (configData.config.tts_provider) setSelectedTtsProvider(configData.config.tts_provider);
+                if (configData.config.tts_voice) setSelectedVoice(configData.config.tts_voice);
+                if (configData.config.tts_language) setSelectedLanguage(configData.config.tts_language);
+            }
+        });
     }, []);
+
+    const handleTtsProviderChange = (provider: string) => {
+        setSelectedTtsProvider(provider);
+        stopPreview();
+        const voices = catalog.tts[provider]?.voices ?? [];
+        if (voices.length > 0) setSelectedVoice(voices[0].value);
+    };
+
+    const stopPreview = () => {
+        if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current = null;
+        }
+        setPreviewState("idle");
+    };
+
+    const playPreview = async () => {
+        stopPreview();
+        setPreviewState("loading");
+        try {
+            const params = new URLSearchParams({
+                provider: selectedTtsProvider,
+                voice: selectedVoice,
+                model: "", 
+                language: selectedLanguage,
+            });
+            const res = await fetch(`/api/voice-preview?${params}`);
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+                throw new Error(errData.error || `HTTP ${res.status}`);
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audioRef.current = audio;
+            audio.onended = () => { setPreviewState("idle"); URL.revokeObjectURL(url); };
+            audio.onerror = () => { setPreviewState("idle"); URL.revokeObjectURL(url); };
+            await audio.play();
+            setPreviewState("playing");
+        } catch (e: any) {
+            console.error("[VoicePreview]", e);
+            setPreviewState("idle");
+            setMessage(`Preview failed: ${e.message}`);
+            setStatus('error');
+        }
+    };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -69,10 +143,6 @@ export default function BulkDialer() {
         setStatus('dialing');
         setProgress({ total: numbers.length, current: 0 });
 
-        const form = e.target as HTMLFormElement;
-        const modelProvider = (form.elements.namedItem('modelProvider') as HTMLSelectElement).value;
-        const voice = (form.elements.namedItem('voice') as HTMLSelectElement).value;
-
         let successCount = 0;
         let failCount = 0;
 
@@ -82,7 +152,14 @@ export default function BulkDialer() {
                 const res = await fetch('/api/dispatch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ phoneNumber: num, prompt, modelProvider, voice }),
+                    body: JSON.stringify({
+                        phoneNumber: num,
+                        prompt,
+                        modelProvider: selectedProvider,
+                        voice: selectedVoice,
+                        ttsProvider: selectedTtsProvider,
+                        ttsLanguage: selectedLanguage,
+                    }),
                 });
 
                 if (res.ok) successCount++;
@@ -112,7 +189,27 @@ export default function BulkDialer() {
                             <p className="text-sm text-[#8b949e]">Upload CSV to dial multiple users</p>
                         </div>
                     </div>
+                    <button
+                        onClick={loadCatalog}
+                        disabled={catalogLoading}
+                        title="Refresh voices & models from provider APIs"
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-500 dark:text-[#8b949e] border border-gray-200 dark:border-[#30363d] hover:bg-gray-50 dark:hover:bg-[#21262d] transition-colors"
+                        type="button"
+                    >
+                        <RefreshCw className={`w-3.5 h-3.5 ${catalogLoading ? 'animate-spin' : ''}`} />
+                        {catalogLoading ? 'Loading...' : 'Refresh'}
+                    </button>
                 </div>
+
+                {/* Live indicator */}
+                {!catalogLoading && (
+                    <div className="mb-5 flex items-center gap-2 text-xs text-gray-500 dark:text-[#8b949e]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block" />
+                        Voices & models fetched live from provider APIs
+                        {liveStatus.sarvam_voices && <span className="px-1.5 py-0.5 rounded bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400 font-medium">Sarvam ✓</span>}
+                        {liveStatus.groq_models && <span className="px-1.5 py-0.5 rounded bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400 font-medium">Groq ✓</span>}
+                    </div>
+                )}
 
                 <form onSubmit={handleBulkDispatch} className="space-y-5">
                     <div className="space-y-1.5">
@@ -144,34 +241,163 @@ export default function BulkDialer() {
 
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1.5">
-                            <label className="text-sm font-medium text-[#e6edf3]">Model provider</label>
-                            <select
-                                className="w-full px-3 py-2.5 bg-[#0d1117] border border-[#30363d] rounded-lg text-[#e6edf3] outline-none focus:ring-1 focus:ring-[#2f81f7] focus:border-[#2f81f7] text-sm"
-                                name="modelProvider"
-                                value={defaultModel}
-                                onChange={(e) => setDefaultModel(e.target.value)}
-                            >
-                                <option value="openai">OpenAI (GPT-4o)</option>
-                                <option value="groq">Groq (Llama 3)</option>
-                            </select>
+                            <label className="text-sm font-medium text-[#e6edf3] flex items-center gap-1.5">
+                                LLM Provider
+                                {liveStatus.groq_models && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" title="Live data" />}
+                            </label>
+                            <div className="relative">
+                                <select
+                                    className="w-full px-3 py-2.5 bg-[#0d1117] border border-[#30363d] rounded-lg text-[#e6edf3] outline-none focus:ring-1 focus:ring-[#2f81f7] focus:border-[#2f81f7] text-sm appearance-none pr-8"
+                                    value={selectedProvider}
+                                    onChange={(e) => setSelectedProvider(e.target.value)}
+                                    disabled={catalogLoading}
+                                >
+                                    {catalogLoading
+                                        ? <option>Loading...</option>
+                                        : Object.entries(catalog.llm).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)
+                                    }
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                            </div>
                         </div>
                         <div className="space-y-1.5">
-                            <label className="text-sm font-medium text-[#e6edf3]">Voice</label>
-                            <select
-                                className="w-full px-3 py-2.5 bg-[#0d1117] border border-[#30363d] rounded-lg text-[#e6edf3] outline-none focus:ring-1 focus:ring-[#2f81f7] focus:border-[#2f81f7] text-sm"
-                                name="voice"
-                                value={defaultVoice}
-                                onChange={(e) => setDefaultVoice(e.target.value)}
-                            >
-                                <option value="alloy">Alloy (US)</option>
-                                <option value="echo">Echo (US)</option>
-                                <option value="shimmer">Shimmer (US)</option>
-                                <option value="anushka">Anushka (IN)</option>
-                                <option value="aravind">Aravind (IN)</option>
-                                <option value="f786b574-daa5-4673-aa0c-cbe3e8534c02">Default Voice (Cartesia)</option>
-                                <option value="aura-asteria-en">Asteria (Deepgram)</option>
-                            </select>
+                            <label className="text-sm font-medium text-[#e6edf3]">TTS Provider</label>
+                            <div className="relative">
+                                <select
+                                    className="w-full px-3 py-2.5 bg-[#0d1117] border border-[#30363d] rounded-lg text-[#e6edf3] outline-none focus:ring-1 focus:ring-[#2f81f7] focus:border-[#2f81f7] text-sm appearance-none pr-8"
+                                    value={selectedTtsProvider}
+                                    onChange={(e) => handleTtsProviderChange(e.target.value)}
+                                    disabled={catalogLoading}
+                                >
+                                    {catalogLoading
+                                        ? <option>Loading...</option>
+                                        : Object.entries(catalog.tts).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)
+                                    }
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                            </div>
                         </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                            <label className="text-sm font-medium text-[#e6edf3] flex items-center gap-1.5">
+                                Voice
+                                {(liveStatus.sarvam_voices && selectedTtsProvider === 'sarvam') && (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block animate-pulse" title="Live from Sarvam API" />
+                                )}
+                                {catalogLoading && <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />}
+                            </label>
+                            <div className="flex gap-2 items-center">
+                                <div className="relative flex-1 min-w-0">
+                                    <select
+                                        className="w-full px-3 py-2.5 bg-[#0d1117] border border-[#30363d] rounded-lg text-[#e6edf3] outline-none focus:ring-1 focus:ring-[#2f81f7] focus:border-[#2f81f7] text-sm appearance-none pr-8"
+                                        value={selectedVoice}
+                                        onChange={(e) => { setSelectedVoice(e.target.value); stopPreview(); }}
+                                        disabled={catalogLoading}
+                                    >
+                                        {catalogLoading
+                                            ? <option>Loading voices...</option>
+                                            : (catalog.tts[selectedTtsProvider]?.voices ?? []).map(v => (
+                                                <option key={v.value} value={v.value}>
+                                                    {v.gender ? `${v.label} (${v.gender === 'female' ? '♀' : v.gender === 'male' ? '♂' : '◈'})` : v.label}
+                                                </option>
+                                            ))
+                                        }
+                                    </select>
+                                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={previewState === "playing" ? stopPreview : playPreview}
+                                    disabled={previewState === "loading" || !selectedVoice || catalogLoading}
+                                    title={previewState === "playing" ? "Stop preview" : "Preview this voice"}
+                                    className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2.5 rounded-lg border text-xs font-semibold transition-all whitespace-nowrap ${
+                                        previewState === "playing"
+                                            ? "bg-[#a371f7] text-white border-[#a371f7]"
+                                            : previewState === "loading"
+                                                ? "bg-[#21262d] text-[#484f58] border-[#30363d] cursor-wait"
+                                                : "bg-[#0d1117] text-[#8b949e] border-[#30363d] hover:bg-[#21262d] disabled:opacity-40"
+                                    }`}
+                                >
+                                    {previewState === "loading" ? (
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : previewState === "playing" ? (
+                                        <StopCircle className="w-3.5 h-3.5" />
+                                    ) : (
+                                        <Play className="w-3.5 h-3.5" />
+                                    )}
+                                    <span>{previewState === "playing" ? "Stop" : "Preview"}</span>
+                                </button>
+                            </div>
+                            {(() => {
+                                const _ttsLangCatalog = catalog.tts[selectedTtsProvider]?.languages;
+                                const voiceLangTags: ModelOption[] = _ttsLangCatalog
+                                    ? _ttsLangCatalog
+                                    : selectedTtsProvider === "openai"
+                                        ? [{ value: "multi", label: "57 languages" }]
+                                        : selectedTtsProvider === "cartesia"
+                                            ? [{ value: "en", label: "Multilingual (60+)" }]
+                                            : selectedTtsProvider === "deepgram"
+                                                ? [{ value: "en-US", label: "English (US)" }]
+                                                : [];
+                                const voiceLangChips = voiceLangTags.slice(0, 9);
+                                const voiceLangExtra = voiceLangTags.length > 9 ? voiceLangTags.length - 9 : 0;
+                                
+                                return voiceLangChips.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                        <Globe className="w-3 h-3 text-gray-400 dark:text-[#484f58] flex-shrink-0" />
+                                        {[...voiceLangChips]
+                                            .sort((a, b) => {
+                                                if (a.value === selectedLanguage) return -1;
+                                                if (b.value === selectedLanguage) return 1;
+                                                return 0;
+                                            })
+                                            .map((lang) => {
+                                                const isActive = lang.value === selectedLanguage;
+                                                return (
+                                                    <button
+                                                        key={lang.value}
+                                                        type="button"
+                                                        title={`Switch to ${lang.label}`}
+                                                        onClick={() => { setSelectedLanguage(lang.value); stopPreview(); }}
+                                                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap transition-all ${
+                                                            isActive
+                                                                ? "bg-[#2f81f7] text-white border-[#2f81f7] shadow-sm"
+                                                                : "bg-[#2f81f7]/10 text-[#2f81f7] border-[#2f81f7]/20 hover:bg-[#2f81f7]/20"
+                                                        }`}
+                                                    >
+                                                        {isActive && <span className="mr-0.5">✓</span>}
+                                                        {lang.label.replace(" (India)", "").replace(" (US)", "")}
+                                                    </button>
+                                                );
+                                            })}
+                                        {voiceLangExtra > 0 && (
+                                            <span className="text-[10px] text-gray-400 dark:text-[#484f58]">+{voiceLangExtra} more</span>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                        </div>
+
+                        {catalog.tts[selectedTtsProvider]?.languages && (
+                            <div className="space-y-1.5">
+                                <label className="text-sm font-medium text-[#e6edf3]">Language</label>
+                                <div className="relative">
+                                    <select
+                                        className="w-full px-3 py-2.5 bg-[#0d1117] border border-[#30363d] rounded-lg text-[#e6edf3] outline-none focus:ring-1 focus:ring-[#2f81f7] focus:border-[#2f81f7] text-sm appearance-none pr-8"
+                                        value={selectedLanguage}
+                                        onChange={(e) => { setSelectedLanguage(e.target.value); stopPreview(); }}
+                                        disabled={catalogLoading}
+                                    >
+                                        {(catalog.tts[selectedTtsProvider]?.languages ?? STT_LANGUAGES).map(l => (
+                                            <option key={l.value} value={l.value}>{l.label}</option>
+                                        ))}
+                                    </select>
+                                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     <button

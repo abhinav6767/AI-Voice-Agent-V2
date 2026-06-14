@@ -10,6 +10,11 @@ from dotenv import load_dotenv
 from livekit import agents, api
 from livekit.agents import AgentSession, Agent, RoomInputOptions
 from livekit.plugins import openai, cartesia, deepgram, noise_cancellation, silero, sarvam
+try:
+    from livekit.plugins import google as google_plugin
+    _HAS_GOOGLE = True
+except ImportError:
+    _HAS_GOOGLE = False
 from livekit.agents import llm
 from typing import Optional
 
@@ -40,7 +45,14 @@ _VAD = silero.VAD.load()
 def _build_tts(provider_override: str = None, voice_override: str = None):
     provider = (provider_override or os.getenv("TTS_PROVIDER", config.DEFAULT_TTS_PROVIDER)).lower()
 
-    if voice_override in ["anushka", "aravind", "amartya", "dhruv", "ishita"]:
+    # Route to Sarvam if the voice override is a known Sarvam speaker (bulbul:v3 compatible list)
+    _SARVAM_VOICES = {
+        "shubh", "ritu", "rahul", "pooja", "simran", "kavya", "amit",
+        "ratan", "rohan", "dev", "ishita", "shreya", "manan", "sumit",
+        "priya", "aditya", "kabir", "neha", "varun", "roopa", "aayan",
+        "ashutosh", "advait", "amelia", "sophia",
+    }
+    if voice_override in _SARVAM_VOICES:
         provider = "sarvam"
 
     if provider == "cartesia":
@@ -66,6 +78,7 @@ def _build_tts(provider_override: str = None, voice_override: str = None):
 
 def _build_llm(provider_override: str = None):
     provider = (provider_override or os.getenv("LLM_PROVIDER", config.DEFAULT_LLM_PROVIDER)).lower()
+
     if provider == "groq":
         logger.info("[LLM] Groq")
         return openai.LLM(
@@ -74,8 +87,35 @@ def _build_llm(provider_override: str = None):
             model=os.getenv("GROQ_MODEL", config.GROQ_MODEL),
             temperature=float(os.getenv("GROQ_TEMPERATURE", str(config.GROQ_TEMPERATURE))),
         )
-    logger.info("[LLM] OpenAI")
-    return openai.LLM(model=config.DEFAULT_LLM_MODEL)
+
+    if provider in ("google", "gemini"):
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if gemini_key and _HAS_GOOGLE:
+            logger.info("[LLM] Google Gemini")
+            return google_plugin.LLM(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+                api_key=gemini_key,
+            )
+        logger.warning("[LLM] Google requested but plugin/key not available — falling back to Groq")
+
+    if provider == "openai":
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if openai_key:
+            logger.info("[LLM] OpenAI")
+            return openai.LLM(
+                api_key=openai_key,
+                model=os.getenv("OPENAI_MODEL", config.DEFAULT_LLM_MODEL),
+            )
+        logger.warning("[LLM] OpenAI requested but OPENAI_API_KEY not set — falling back to Groq")
+
+    # Safe default: Groq (always configured)
+    logger.info("[LLM] Groq (default fallback)")
+    return openai.LLM(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=os.getenv("GROQ_API_KEY"),
+        model=os.getenv("GROQ_MODEL", config.GROQ_MODEL),
+        temperature=float(os.getenv("GROQ_TEMPERATURE", str(config.GROQ_TEMPERATURE))),
+    )
 
 
 # =============================================================================

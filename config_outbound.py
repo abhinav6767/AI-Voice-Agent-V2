@@ -22,8 +22,11 @@ def fetch_sarvam_voices() -> list[str]:
     if _sarvam_voices_cache is not None:
         return _sarvam_voices_cache
 
-    fallback = ["anushka", "aravind", "amartya", "dhruv", "ishita", "meera",
-                "pavithra", "maitreyi", "arvind", "arjun", "abhilash"]
+    # Valid speakers for bulbul:v3 as of June 2026
+    fallback = ["shubh", "ritu", "rahul", "pooja", "simran", "kavya", "amit",
+                "ratan", "rohan", "dev", "ishita", "shreya", "manan", "sumit",
+                "priya", "aditya", "kabir", "neha", "varun", "roopa", "aayan",
+                "ashutosh", "advait", "amelia", "sophia"]
     try:
         import urllib.request
         api_key = os.getenv("SARVAM_API_KEY", "")
@@ -349,7 +352,7 @@ STT_LANGUAGE = "auto"    # "auto" enables multi-language detection/code-switchin
 
 # --- 3. TEXT-TO-SPEECH (TTS) SETTINGS ---
 DEFAULT_TTS_PROVIDER = "sarvam"
-DEFAULT_TTS_VOICE = "aravind"   # OpenAI: alloy, echo, shimmer | Sarvam: anushka, aravind
+DEFAULT_TTS_VOICE = "rahul"   # OpenAI: alloy, echo, shimmer | Sarvam (bulbul:v3): rahul, ishita, priya, neha, rohan
 
 # Sarvam AI Specifics (for Indian Context)
 SARVAM_MODEL = "bulbul:v3"

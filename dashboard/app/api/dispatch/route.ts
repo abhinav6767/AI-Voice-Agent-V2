@@ -24,7 +24,9 @@ export async function POST(request: Request) {
             phone_number: phoneNumber,
             user_prompt: prompt || "",
             model_provider: modelProvider || "openai",
-            voice_id: voice || "alloy"
+            voice_id: voice || "alloy",
+            tts_provider: body.ttsProvider,
+            tts_language: body.ttsLanguage
         });
 
         console.log(`[DISPATCH] Step 1: Creating room ${roomName}`);

@@ -194,6 +194,8 @@ export interface EnrichedLead {
 }
 
 interface LeadMeta {
+  name?: string;
+  city?: string;
   email?: string;
   status?: LeadStatus;
   priority?: LeadPriority;
@@ -288,9 +290,9 @@ export async function getLeads(): Promise<EnrichedLead[]> {
 
       return {
         timestamp: lead.timestamp,
-        name: lead.name,
+        name: m.name || lead.name,
         phone: lead.phone,
-        city: lead.city,
+        city: m.city || lead.city,
         email: m.email || "",
         status: m.status || "New",
         priority: m.priority || "Medium",

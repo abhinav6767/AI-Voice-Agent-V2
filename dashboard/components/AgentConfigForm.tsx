@@ -5,7 +5,7 @@ import {
   Bot, Save, RotateCcw, Plus, Trash2, Link2, FileText, Upload,
   Mic, Volume2, Brain, Wrench, Phone, ChevronDown, ChevronUp,
   CheckCircle, AlertCircle, Loader2, Sparkles, Globe, Settings2,
-  MessageSquare, Zap, X, RefreshCw
+  MessageSquare, Zap, X, RefreshCw, Play, StopCircle
 } from "lucide-react";
 import type { ProviderCatalog, VoiceOption, ModelOption } from "@/lib/providers";
 import { FALLBACK_CATALOG, STT_LANGUAGES } from "@/lib/providers";
@@ -138,6 +138,11 @@ interface SelectProps {
 }
 
 function Select({ id, value, onChange, options, loading, liveSource }: SelectProps) {
+  // Deduplicate options by value to prevent React duplicate key errors
+  const uniqueOptions = options.filter(
+    (opt, index, self) => self.findIndex((o) => o.value === opt.value) === index
+  );
+
   return (
     <div className="relative">
       <select
@@ -150,7 +155,7 @@ function Select({ id, value, onChange, options, loading, liveSource }: SelectPro
         {loading ? (
           <option>Loading...</option>
         ) : (
-          options.map((opt) => (
+          uniqueOptions.map((opt) => (
             <option key={opt.value} value={opt.value}>{opt.label}</option>
           ))
         )}
@@ -183,6 +188,10 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
   const [newResourceName, setNewResourceName] = useState("");
   const [newResourceValue, setNewResourceValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Voice preview state
+  const [previewState, setPreviewState] = useState<"idle" | "loading" | "playing">("idle");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Load provider catalog dynamically
   const loadCatalog = useCallback(async () => {
@@ -319,6 +328,46 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
     update("custom_functions", fns);
   };
 
+  // ── Voice preview helpers ─────────────────────────────────────────────────
+  const stopPreview = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setPreviewState("idle");
+  };
+
+  const playPreview = async () => {
+    if (!config) return;
+    stopPreview();
+    setPreviewState("loading");
+    try {
+      const params = new URLSearchParams({
+        provider: config.tts_provider,
+        voice:    config.tts_voice,
+        model:    config.tts_model ?? "",
+        language: config.tts_language ?? "en-IN",
+      });
+      const res = await fetch(`/api/voice-preview?${params}`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { setPreviewState("idle"); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setPreviewState("idle"); URL.revokeObjectURL(url); };
+      await audio.play();
+      setPreviewState("playing");
+    } catch (e: any) {
+      console.error("[VoicePreview]", e);
+      setPreviewState("idle");
+      showToast("error", `Preview failed: ${e.message}`);
+    }
+  };
+
   // ─── Derived catalog data ───────────────────────────────────────────────────
   const ttsProviderOptions = Object.entries(catalog.tts).map(([key, val]) => ({
     value: key,
@@ -340,6 +389,20 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
   const ttsVoices: VoiceOption[] = catalog.tts[currentTtsProvider]?.voices ?? [];
   const ttsModels: ModelOption[] = catalog.tts[currentTtsProvider]?.models ?? [];
   const ttsLanguages: ModelOption[] = catalog.tts[currentTtsProvider]?.languages ?? STT_LANGUAGES;
+
+  // Language-support chips shown below the voice selector
+  const _ttsLangCatalog = catalog.tts[currentTtsProvider]?.languages;
+  const voiceLangTags: ModelOption[] = _ttsLangCatalog
+    ? _ttsLangCatalog
+    : currentTtsProvider === "openai"
+      ? [{ value: "multi", label: "57 languages" }]
+      : currentTtsProvider === "cartesia"
+        ? [{ value: "en", label: (config?.tts_model ?? "").includes("multilingual") ? "Multilingual (60+)" : "English" }]
+        : currentTtsProvider === "deepgram"
+          ? [{ value: "en-US", label: "English (US)" }]
+          : [];
+  const voiceLangChips = voiceLangTags.slice(0, 9);
+  const voiceLangExtra = voiceLangTags.length > 9 ? voiceLangTags.length - 9 : 0;
   const llmModels: ModelOption[] = catalog.llm[currentLlmProvider]?.models ?? [];
   const sttModels: ModelOption[] = catalog.stt[currentSttProvider]?.models ?? [];
 
@@ -598,6 +661,7 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
               value={config.tts_provider}
               onChange={(v) => {
                 update("tts_provider", v);
+                stopPreview();
                 // Auto-select first voice & model for the new provider
                 const voices = catalog.tts[v]?.voices ?? [];
                 const models = catalog.tts[v]?.models ?? [];
@@ -621,21 +685,84 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
           </div>
           <div>
             <Label htmlFor="tts_voice">Voice</Label>
-            <Select
-              id="tts_voice"
-              value={config.tts_voice}
-              onChange={(v) => update("tts_voice", v)}
-              options={ttsVoices.map(v => ({
-                value: v.value,
-                label: v.gender ? `${v.label} (${v.gender === "female" ? "♀" : v.gender === "male" ? "♂" : "◈"})` : v.label
-              }))}
-              loading={catalogLoading}
-              liveSource={!!liveStatus.sarvam_voices || !!liveStatus.cartesia_voices}
-            />
+            {/* Voice selector + Preview button row */}
+            <div className="flex gap-2 items-center">
+              <div className="flex-1 min-w-0">
+                <Select
+                  id="tts_voice"
+                  value={config.tts_voice}
+                  onChange={(v) => { update("tts_voice", v); stopPreview(); }}
+                  options={ttsVoices.map(v => ({
+                    value: v.value,
+                    label: v.gender ? `${v.label} (${v.gender === "female" ? "♀" : v.gender === "male" ? "♂" : "◈"})` : v.label
+                  }))}
+                  loading={catalogLoading}
+                  liveSource={!!liveStatus.sarvam_voices || !!liveStatus.cartesia_voices}
+                />
+              </div>
+              {/* ▶ Preview button */}
+              <button
+                id="btn-voice-preview"
+                onClick={previewState === "playing" ? stopPreview : playPreview}
+                disabled={previewState === "loading" || !config.tts_voice || catalogLoading}
+                title={previewState === "playing" ? "Stop preview" : "Preview this voice"}
+                className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-xs font-semibold transition-all whitespace-nowrap ${
+                  previewState === "playing"
+                    ? "bg-indigo-500 text-white border-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.4)]"
+                    : previewState === "loading"
+                      ? "bg-white/30 dark:bg-white/5 text-gray-400 dark:text-[#484f58] border-gray-200/50 dark:border-white/10 cursor-wait"
+                      : "bg-white/50 dark:bg-black/20 text-gray-600 dark:text-[#8b949e] border-gray-200/50 dark:border-white/10 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                }`}
+              >
+                {previewState === "loading" ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : previewState === "playing" ? (
+                  <StopCircle className="w-3.5 h-3.5" />
+                ) : (
+                  <Play className="w-3.5 h-3.5" />
+                )}
+                <span>{previewState === "loading" ? "Loading…" : previewState === "playing" ? "Stop" : "Preview"}</span>
+              </button>
+            </div>
+            {/* Language support chips — active chip highlighted, clickable */}
+            {voiceLangChips.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                <Globe className="w-3 h-3 text-gray-400 dark:text-[#484f58] flex-shrink-0" />
+                {/* Sort so active language is always first */}
+                {[...voiceLangChips]
+                  .sort((a, b) => {
+                    if (a.value === config.tts_language) return -1;
+                    if (b.value === config.tts_language) return 1;
+                    return 0;
+                  })
+                  .map((lang) => {
+                    const isActive = lang.value === config.tts_language;
+                    return (
+                      <button
+                        key={lang.value}
+                        type="button"
+                        title={`Switch language to ${lang.label}`}
+                        onClick={() => update("tts_language", lang.value)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap transition-all ${
+                          isActive
+                            ? "bg-blue-500 dark:bg-blue-500 text-white border-blue-500 shadow-sm shadow-blue-500/30"
+                            : "bg-blue-50/80 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-200/50 dark:border-blue-500/20 hover:bg-blue-100 dark:hover:bg-blue-500/20"
+                        }`}
+                      >
+                        {isActive && <span className="mr-0.5">✓</span>}
+                        {lang.label.replace(" (India)", "").replace(" (US)", "")}
+                      </button>
+                    );
+                  })}
+                {voiceLangExtra > 0 && (
+                  <span className="text-[10px] text-gray-400 dark:text-[#484f58]">+{voiceLangExtra} more</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Language (only for Sarvam and other multi-language providers) */}
+        {/* Language dropdown (only for Sarvam and other multi-language providers) */}
         {catalog.tts[currentTtsProvider]?.languages && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -647,6 +774,9 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
                 options={ttsLanguages}
                 loading={catalogLoading}
               />
+              <p className="text-[10px] text-gray-400 dark:text-[#484f58] mt-1">
+                Click a language chip above to quickly switch, or use this dropdown.
+              </p>
             </div>
           </div>
         )}

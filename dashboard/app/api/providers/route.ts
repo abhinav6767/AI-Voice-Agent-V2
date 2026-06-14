@@ -35,26 +35,9 @@ function loadRootEnv(): Record<string, string> {
 
 // ── Sarvam voice fetcher ─────────────────────────────────────────────────────
 async function fetchSarvamVoices(apiKey: string) {
-  try {
-    const res = await fetch("https://api.sarvam.ai/text-to-speech/voices", {
-      headers: { "API-Subscription-Key": apiKey },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) throw new Error(`Sarvam HTTP ${res.status}`);
-    const json = await res.json();
-    // Sarvam returns { voices: [...] } or a plain array
-    const voiceArr: any[] = Array.isArray(json) ? json : (json.voices ?? []);
-    if (voiceArr.length === 0) throw new Error("Empty voice list");
-    return voiceArr.map((v: any) => ({
-      value: v.name ?? v.speaker_id ?? v.id ?? v,
-      label: toTitleCase(v.name ?? v.speaker_id ?? v.id ?? String(v)),
-      gender: v.gender?.toLowerCase(),
-      language: v.language ?? "Indian",
-    }));
-  } catch (e) {
-    console.warn("[providers] Sarvam voice fetch failed, using fallback:", e);
-    return null; // triggers fallback
-  }
+  // Sarvam does not currently expose a /voices endpoint (returns 404).
+  // We rely on the FALLBACK_CATALOG for Sarvam voices instead.
+  return null;
 }
 
 // ── Groq model fetcher ────────────────────────────────────────────────────────

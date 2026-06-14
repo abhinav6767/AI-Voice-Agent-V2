@@ -43,7 +43,6 @@ Use this context to inform your answers if they ask questions about what they ar
         { role: "system", content: BASE_SYSTEM_PROMPT + "\n" + dynamicContext },
         ...messages,
       ],
-      maxTokens: 1024, // prevent runaway generation
     });
 
     // TODO: [REMOVE BEFORE GO-LIVE] Token usage tracking for dev/testing only

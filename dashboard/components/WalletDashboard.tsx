@@ -106,7 +106,7 @@ export default function WalletDashboard({ data }: { data: WalletData }) {
   const convertedCategoryTotals = useMemo(() => {
     const res: Record<string, number> = {};
     for (const key in data.categoryTotals) {
-      res[key] = data.categoryTotals[key] * rate;
+      res[key] = data.categoryTotals[key as TransactionType] * rate;
     }
     return res;
   }, [data.categoryTotals, rate]);
@@ -115,8 +115,8 @@ export default function WalletDashboard({ data }: { data: WalletData }) {
     return data.dailySpending.map(ds => {
       const convertedDs = { ...ds };
       ALL_TYPES.forEach(type => {
-        if (typeof ds[type] === 'number') {
-          convertedDs[type] = (ds[type] as number) * rate;
+        if (typeof (ds as any)[type] === 'number') {
+          (convertedDs as any)[type] = ((ds as any)[type] as number) * rate;
         }
       });
       return convertedDs;
@@ -279,7 +279,7 @@ export default function WalletDashboard({ data }: { data: WalletData }) {
           <div className="flex items-center justify-between px-5 pt-5 pb-1">
             <div>
               <h3 className="font-semibold text-gray-900 dark:text-[#e6edf3]">Recent Transactions</h3>
-              <p className="text-xs text-gray-400 dark:text-[#8b949e] mt-0.5">All charges from VoBiz billing ledger · {transactions.length} records</p>
+              <p className="text-xs text-gray-400 dark:text-[#8b949e] mt-0.5">All charges from VoBiz billing ledger · {data.transactions.length} records</p>
             </div>
             <span className="text-xs text-orange-500 font-medium cursor-pointer hover:underline">View all →</span>
           </div>
