@@ -1,41 +1,49 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useRef } from "react";
 
 export default function MouseEffect() {
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-  const [isHovering, setIsHovering] = useState(false);
+  const glowRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const updateMousePosition = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
-      
-      // Check if hovering over clickable elements
-      const target = e.target as HTMLElement;
-      const isClickable = window.getComputedStyle(target).cursor === "pointer" || 
-                          target.tagName.toLowerCase() === "button" || 
-                          target.tagName.toLowerCase() === "a";
-      setIsHovering(isClickable);
+    let rafId: number;
+    let pendingX = 0;
+    let pendingY = 0;
+    let hasPendingUpdate = false;
+
+    const updatePosition = () => {
+      if (glowRef.current) {
+        glowRef.current.style.background = `radial-gradient(600px circle at ${pendingX}px ${pendingY}px, rgba(99, 102, 241, 0.08), transparent 40%)`;
+      }
+      hasPendingUpdate = false;
     };
 
-    window.addEventListener("mousemove", updateMousePosition);
+    const handleMouseMove = (e: MouseEvent) => {
+      pendingX = e.clientX;
+      pendingY = e.clientY;
+      if (!hasPendingUpdate) {
+        hasPendingUpdate = true;
+        rafId = requestAnimationFrame(updatePosition);
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove, { passive: true });
 
     return () => {
-      window.removeEventListener("mousemove", updateMousePosition);
+      window.removeEventListener("mousemove", handleMouseMove);
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
     };
   }, []);
 
   return (
-    <>
-      {/* Background Interactive Glow Spotlight */}
-      <div
-        className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-300"
-        style={{
-          background: `radial-gradient(600px circle at ${mousePosition.x}px ${mousePosition.y}px, rgba(99, 102, 241, 0.08), transparent 40%)`,
-        }}
-      />
-      
-    </>
+    <div
+      ref={glowRef}
+      className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-300"
+      style={{
+        background: `radial-gradient(600px circle at -1000px -1000px, rgba(99, 102, 241, 0.08), transparent 40%)`,
+      }}
+    />
   );
 }

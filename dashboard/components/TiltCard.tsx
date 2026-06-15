@@ -11,6 +11,7 @@ interface TiltCardProps {
 
 export default function TiltCard({ children, className = "", style = {} }: TiltCardProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const rectRef = useRef<DOMRect | null>(null);
 
   const x = useMotionValue(0);
   const y = useMotionValue(0);
@@ -25,10 +26,22 @@ export default function TiltCard({ children, className = "", style = {} }: TiltC
   const rotateX = useTransform(mouseYSpring, [-0.5, 0.5], ["15deg", "-15deg"]);
   const rotateY = useTransform(mouseXSpring, [-0.5, 0.5], ["-15deg", "15deg"]);
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
-    if (!ref.current) return;
+  const handleMouseEnter = () => {
+    if (ref.current) {
+      rectRef.current = ref.current.getBoundingClientRect();
+    }
+  };
 
-    const rect = ref.current.getBoundingClientRect();
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+    if (!rectRef.current) {
+      if (ref.current) {
+        rectRef.current = ref.current.getBoundingClientRect();
+      } else {
+        return;
+      }
+    }
+
+    const rect = rectRef.current;
     const width = rect.width;
     const height = rect.height;
     
@@ -46,11 +59,13 @@ export default function TiltCard({ children, className = "", style = {} }: TiltC
   const handleMouseLeave = () => {
     x.set(0);
     y.set(0);
+    rectRef.current = null;
   };
 
   return (
     <motion.div
       ref={ref}
+      onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
       style={{

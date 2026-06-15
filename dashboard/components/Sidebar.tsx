@@ -25,6 +25,7 @@ import { useTheme } from "next-themes";
 import { useAppContext } from "./app-provider";
 import { motion, AnimatePresence } from "framer-motion";
 import ProfileMenu from "@/components/ProfileMenu";
+import { flushSync } from "react-dom";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -43,9 +44,7 @@ export default function Sidebar() {
       return;
     }
     document.startViewTransition(() => {
-      import('react-dom').then((ReactDOM) => {
-        ReactDOM.flushSync(() => setTheme(newTheme));
-      });
+      flushSync(() => setTheme(newTheme));
     });
   };
 
