@@ -129,6 +129,7 @@ export default function LiveRoomsMonitor() {
   const [killingRoomId, setKillingRoomId] = useState<string | null>(null)
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const fetchRooms = async (background = false) => {
     if (!background) setLoading(true)
@@ -137,6 +138,7 @@ export default function LiveRoomsMonitor() {
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
       setRooms(data.rooms ?? [])
+      setLastUpdated(new Date())
       setError(null)
     } catch (e: any) {
       setError(e.message || 'Failed to load rooms')
@@ -147,29 +149,37 @@ export default function LiveRoomsMonitor() {
 
   useEffect(() => {
     fetchRooms()
-    const intId = setInterval(() => fetchRooms(true), 15000)
+    const intId = setInterval(() => fetchRooms(true), 10000) // 10s polling
     return () => clearInterval(intId)
   }, [])
 
   const handleKill = async (roomName: string) => {
     setKillingRoomId(roomName)
     setConfirmKillId(null)
+    // Optimistically remove from UI immediately for instant feedback
+    setRooms(prev => prev.filter(r => r.name !== roomName))
+    if (selectedRoom?.name === roomName) setSelectedRoom(null)
     try {
-      const res = await fetch(`/api/super-admin/rooms/${roomName}`, {
+      const res = await fetch(`/api/super-admin/rooms/${encodeURIComponent(roomName)}`, {
         method: 'DELETE',
       })
       const data = await res.json()
       if (!res.ok) {
+        // Restore: re-fetch since we optimistically removed it
+        await fetchRooms(true)
         setToast(`❌ ${data.error ?? 'Failed to kill room'}`)
       } else {
-        setRooms(prev => prev.filter(r => r.name !== roomName))
-        setToast(`✓ Room "${roomName}" terminated`)
+        const removed = data.participantsRemoved ?? 0
+        setToast(`✓ Call terminated — ${removed} participant${removed !== 1 ? 's' : ''} disconnected`)
+        // Confirm with a fresh fetch after 2s
+        setTimeout(() => fetchRooms(true), 2000)
       }
     } catch (e: any) {
+      await fetchRooms(true) // Restore on network error
       setToast(`❌ ${e.message || 'Network error'}`)
     } finally {
       setKillingRoomId(null)
-      setTimeout(() => setToast(null), 4000)
+      setTimeout(() => setToast(null), 5000)
     }
   }
 
@@ -191,12 +201,19 @@ export default function LiveRoomsMonitor() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Active Calls</h2>
-          <p className="text-sm text-white/40 mt-0.5">Monitoring all LiveKit rooms across tenants</p>
+          <p className="text-sm text-white/40 mt-0.5">
+            Monitoring all LiveKit rooms across tenants
+            {lastUpdated && (
+              <span className="ml-2 text-white/20 text-[10px] font-mono">
+                · updated {lastUpdated.toLocaleTimeString()}
+              </span>
+            )}
+          </p>
         </div>
         <button
           onClick={() => fetchRooms(false)}
           disabled={loading}
-          title="Refresh"
+          title="Refresh now"
           className="p-2 rounded-lg border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-white/40 hover:text-white/80 transition-all disabled:opacity-30"
         >
           <svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"

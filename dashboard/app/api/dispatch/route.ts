@@ -24,11 +24,24 @@ export async function POST(request: Request) {
             const activeWorkspaceId = cookieStore.get("active_workspace_id")?.value;
             if (activeWorkspaceId) {
                 workspaceId = activeWorkspaceId;
+            } else {
+                // No cookie set — fall back to first available workspace
+                const { data: firstWorkspace } = await supabase
+                    .from("businesses")
+                    .select("id")
+                    .eq("is_active", true)
+                    .order("created_at", { ascending: true })
+                    .limit(1)
+                    .single();
+                if (firstWorkspace?.id) {
+                    workspaceId = firstWorkspace.id;
+                    console.log(`[DISPATCH] super_admin fallback workspace: ${workspaceId}`);
+                }
             }
         }
 
         if (!workspaceId) {
-            return NextResponse.json({ error: "No workspace associated" }, { status: 403 });
+            return NextResponse.json({ error: "No workspace associated with your account. Please create a workspace first." }, { status: 403 });
         }
 
         const body = await request.json();
@@ -38,11 +51,22 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Phone number is required" }, { status: 400 });
         }
 
-        const trunkId = process.env.VOBIZ_SIP_TRUNK_ID;
+        // Fetch workspace's SIP trunk from DB (multi-tenant architecture).
+        // The Python agent handles the actual SIP dial-out using this trunk ID.
+        // We validate here so the user gets a clear error before the room is created.
+        const { data: wsConfig } = await supabase
+            .from("workspace_config")
+            .select("livekit_trunk_id")
+            .eq("business_id", workspaceId)
+            .single();
+
+        const trunkId = wsConfig?.livekit_trunk_id ?? process.env.VOBIZ_SIP_TRUNK_ID;
         if (!trunkId) {
-            console.error("VOBIZ_SIP_TRUNK_ID is missing in env");
-            return NextResponse.json({ error: "SIP Trunk not configured" }, { status: 500 });
+            console.warn(`[DISPATCH] No SIP trunk for workspace ${workspaceId} — telephony not provisioned`);
+            return NextResponse.json({ error: "SIP Trunk not configured for this workspace. Please provision telephony in Super Admin settings." }, { status: 503 });
         }
+
+        console.log(`[DISPATCH] Using trunk ${trunkId} for workspace ${workspaceId}`);
 
         // Generate a unique room name for this call with workspace ID embedded
         const shortWorkspaceId = workspaceId.slice(0, 8);
