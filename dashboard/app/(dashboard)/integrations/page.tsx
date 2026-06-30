@@ -3,10 +3,11 @@
 import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  Mail, MessageCircle, Instagram, Key, Check, Plus, AlertCircle, 
-  Eye, EyeOff, Trash2, HelpCircle, Save, ExternalLink, Settings, Sparkles, X, Loader2,
-  CheckCircle2, ShieldCheck,
+  Mail, MessageCircle, Instagram, Key, Check, Plus, AlertCircle,
+  Eye, EyeOff, Trash2, Save, Settings, Sparkles, X,
+  CheckCircle2, ShieldCheck, CalendarDays,
 } from "lucide-react";
+
 
 interface Integration {
   id: string;
@@ -35,12 +36,18 @@ function IntegrationsContent() {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [showPassword, setShowPassword] = useState<Record<string, boolean>>({});
   const [gmailSuccess, setGmailSuccess] = useState(false);
+  const [gcalSuccess, setGcalSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+
 
   // Handle Gmail OAuth callback — read token data from URL params
   useEffect(() => {
     const success = searchParams.get("gmail_success");
     const dataParam = searchParams.get("gmail_data");
     const errorParam = searchParams.get("gmail_error");
+    const gcalSuccessParam = searchParams.get("gcal_success");
+    const gcalDataParam = searchParams.get("gcal_data");
+    const gcalErrorParam = searchParams.get("gcal_error");
 
     if (success === "1" && dataParam) {
       try {
@@ -50,20 +57,43 @@ function IntegrationsContent() {
         const updated = { ...existing, gmail: gmailData };
         localStorage.setItem("rapidx_credentials", JSON.stringify(updated));
         setSavedConfigs(updated);
+        setSuccessMessage("Gmail connected successfully!");
         setGmailSuccess(true);
         setTimeout(() => setGmailSuccess(false), 4000);
-        // Clean up URL params
         window.history.replaceState({}, "", "/integrations");
       } catch (e) {
         console.error("Failed to parse Gmail OAuth data", e);
       }
     }
 
-    if (errorParam) {
-      console.error("Gmail OAuth error:", errorParam);
+    if (gcalSuccessParam === "1" && gcalDataParam) {
+      try {
+        const gcalData = JSON.parse(decodeURIComponent(gcalDataParam));
+        const saved = localStorage.getItem("rapidx_credentials");
+        const existing: Record<string, Record<string, string>> = saved ? JSON.parse(saved) : {};
+        // Mark both google_calendar and gmail as connected with the same account
+        const updated = {
+          ...existing,
+          google_calendar: gcalData,
+          gmail: gcalData,
+        };
+        localStorage.setItem("rapidx_credentials", JSON.stringify(updated));
+        setSavedConfigs(updated);
+        setSuccessMessage("Google Calendar & Gmail connected!");
+        setGcalSuccess(true);
+        setTimeout(() => setGcalSuccess(false), 5000);
+        window.history.replaceState({}, "", "/integrations");
+      } catch (e) {
+        console.error("Failed to parse Google Calendar OAuth data", e);
+      }
+    }
+
+    if (errorParam || gcalErrorParam) {
+      console.error("Google OAuth error:", errorParam || gcalErrorParam);
       window.history.replaceState({}, "", "/integrations");
     }
   }, [searchParams]);
+
 
   // Initialize integrations list and load saved credentials from localStorage
   useEffect(() => {
@@ -81,6 +111,17 @@ function IntegrationsContent() {
 
     const list: Integration[] = [
       {
+        id: "google_calendar",
+        name: "Google Calendar + Gmail",
+        category: "Appointments & Email",
+        icon: CalendarDays,
+        color: "#1a73e8",
+        gradient: "from-[#1a73e8]/10 to-[#34a853]/5",
+        description: "Connect your Google account to let Aayushi book, confirm, and reschedule patient appointments directly into Google Calendar during live calls — with automatic reminders.",
+        status: configs["google_calendar"] ? "connected" : "disconnected",
+        configFields: [],
+      },
+      {
         id: "gmail",
         name: "Gmail (OAuth)",
         category: "Email Outreach",
@@ -91,6 +132,7 @@ function IntegrationsContent() {
         status: configs["gmail"] ? "connected" : "disconnected",
         configFields: []
       },
+
       {
         id: "whatsapp",
         name: "WhatsApp Business API",
@@ -136,7 +178,8 @@ function IntegrationsContent() {
     ];
 
     setIntegrations(list);
-  }, [savedConfigs["gmail"] === undefined, savedConfigs["whatsapp"] === undefined, savedConfigs["instagram"] === undefined, savedConfigs["openai"] === undefined]);
+  }, [savedConfigs["google_calendar"] === undefined, savedConfigs["gmail"] === undefined, savedConfigs["whatsapp"] === undefined, savedConfigs["instagram"] === undefined, savedConfigs["openai"] === undefined]);
+
 
   const handleOpenConfig = (integration: Integration) => {
     setActiveIntegration(integration);
@@ -167,19 +210,26 @@ function IntegrationsContent() {
   };
 
   const handleGmailOAuth = () => {
-    // Redirect to our OAuth start route which redirects to Google
+    // Redirect to unified OAuth start (now requests Gmail + Calendar scopes)
     window.location.href = "/api/auth/gmail/start";
   };
 
+  const handleGoogleCalendarOAuth = () => {
+    // Same OAuth flow — unified start route handles both Calendar + Gmail
+    window.location.href = "/api/auth/gmail/start";
+  };
+
+
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
-      {/* Success toast */}
-      {gmailSuccess && (
+      {/* Success toasts */}
+      {(gmailSuccess || gcalSuccess) && (
         <div className="fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-xl bg-green-50 dark:bg-green-500/15 border border-green-200 dark:border-green-500/30 shadow-xl text-green-700 dark:text-green-400 text-sm font-medium animate-in slide-in-from-right">
           <CheckCircle2 className="w-4 h-4" />
-          Gmail connected successfully!
+          {successMessage || "Connected successfully!"}
         </div>
       )}
+
       {/* Title */}
       <div>
         <h2 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-[#e6edf3]">
@@ -252,25 +302,27 @@ function IntegrationsContent() {
                 {/* Saved configs detail (if connected) */}
                 {isConnected && (
                   <div className="mt-4 p-3 rounded-lg bg-gray-50 dark:bg-[#0d1117] border border-gray-150 dark:border-[#21262d]">
-                    {item.id === "gmail" ? (
+                    {(item.id === "gmail" || item.id === "google_calendar") ? (
                       <div className="flex items-center gap-3">
-                        {savedConfigs.gmail?.picture ? (
+                        {(savedConfigs[item.id]?.picture) ? (
                           <img
-                            src={savedConfigs.gmail.picture}
+                            src={savedConfigs[item.id].picture}
                             alt="Google account"
                             className="w-9 h-9 rounded-full border-2 border-green-500/30 flex-shrink-0"
                           />
                         ) : (
-                          <div className="w-9 h-9 rounded-full bg-[#ea4335]/10 border border-[#ea4335]/20 flex items-center justify-center flex-shrink-0">
-                            <Mail className="w-4 h-4 text-[#ea4335]" />
+                          <div className="w-9 h-9 rounded-full bg-[#1a73e8]/10 border border-[#1a73e8]/20 flex items-center justify-center flex-shrink-0">
+                            {item.id === "google_calendar"
+                              ? <CalendarDays className="w-4 h-4 text-[#1a73e8]" />
+                              : <Mail className="w-4 h-4 text-[#ea4335]" />}
                           </div>
                         )}
                         <div className="min-w-0">
                           <p className="text-xs font-semibold text-gray-900 dark:text-[#e6edf3] truncate">
-                            {savedConfigs.gmail?.name || "Google Account"}
+                            {savedConfigs[item.id]?.name || "Google Account"}
                           </p>
                           <p className="text-[11px] text-[#2f81f7] truncate font-mono">
-                            {savedConfigs.gmail?.email}
+                            {savedConfigs[item.id]?.email}
                           </p>
                         </div>
                         <ShieldCheck className="w-4 h-4 text-green-500 flex-shrink-0 ml-auto" />
@@ -319,9 +371,9 @@ function IntegrationsContent() {
                   </>
                 ) : (
                   <>
-                    {item.id === "gmail" ? (
+                    {item.id === "gmail" || item.id === "google_calendar" ? (
                       <button
-                        onClick={handleGmailOAuth}
+                        onClick={item.id === "google_calendar" ? handleGoogleCalendarOAuth : handleGmailOAuth}
                         className="flex items-center gap-2.5 px-4 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 shadow-sm transition-all"
                       >
                         {/* Google G logo */}
@@ -331,8 +383,9 @@ function IntegrationsContent() {
                           <path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/>
                           <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
                         </svg>
-                        Sign in with Google
+                        {item.id === "google_calendar" ? "Connect Google Calendar" : "Sign in with Google"}
                       </button>
+
                     ) : (
                       <button
                         onClick={() => handleOpenConfig(item)}

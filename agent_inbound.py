@@ -8,6 +8,8 @@ import json
 import asyncio
 import datetime
 import re
+import urllib.request
+import urllib.error
 from dotenv import load_dotenv
 
 from livekit import agents, api
@@ -378,6 +380,72 @@ class InboundTools(llm.ToolContext):
         asyncio.create_task(delayed_transfer())
         # Return immediately — agent speaks this while transfer fires in background
         return "Sure thing — one moment while I connect you to someone from our team. Please hold!"
+
+    @llm.function_tool(
+        description=(
+            "Call this tool to perform any real-time integration action during the call. "
+            "Supported actions: "
+            "'book_appointment' — book a Google Calendar appointment. Required params: "
+            "patient_name (str), date (str, e.g. 'tomorrow' or '5th July'), time (str, e.g. '3 PM'), "
+            "treatment (str, e.g. 'dental cleaning'), duration_minutes (int, default 30). "
+            "'check_availability' — check next available slots. Required params: "
+            "date (str), treatment (str). "
+            "Pass all parameters as a JSON string in parameters_json. "
+            "ALWAYS call this when the caller wants to book an appointment — do not ask them to call back."
+        )
+    )
+    async def query_workspace_integration(self, action_name: str, parameters_json: str) -> str:
+        """
+        Generic extensible tool gateway. Routes real-time integration actions
+        to the Next.js API gateway (TOOL_GATEWAY_URL) during an active call.
+
+        Args:
+            action_name:      The action to execute (e.g. 'book_appointment', 'check_availability').
+            parameters_json:  JSON string of parameters for the action.
+        """
+        gateway_url = os.getenv("TOOL_GATEWAY_URL", "http://localhost:3000/api/tools/execute")
+        workspace_id = self.ws_config.workspace_id or "default"
+
+        logger.info(f"[TOOL] query_workspace_integration → action={action_name!r}, workspace={workspace_id!r}")
+
+        payload = json.dumps({
+            "workspace_id": workspace_id,
+            "action_name":  action_name,
+            "parameters":   json.loads(parameters_json) if parameters_json else {},
+        }).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                gateway_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            loop = asyncio.get_event_loop()
+            response_text = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: _do_http(req)),
+                timeout=6.0,
+            )
+            data = json.loads(response_text)
+            result = data.get("result") or data.get("message") or "Done."
+            logger.info(f"[TOOL] Gateway response for {action_name!r}: {result!r}")
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(f"[TOOL] Gateway timed out for action={action_name!r}")
+            return "I'm sorry, I couldn't complete that action right now. Please try again in a moment, or I can have someone call you back."
+        except Exception as e:
+            logger.error(f"[TOOL] Gateway error for action={action_name!r}: {e}")
+            return "I wasn't able to complete that right now. Let me note your request and our team will follow up shortly."
+
+
+def _do_http(req: urllib.request.Request) -> str:
+    """Blocking HTTP call — run in executor so it doesn't block the event loop."""
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {body}")
 
 
 # =============================================================================

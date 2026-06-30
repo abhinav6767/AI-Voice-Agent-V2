@@ -164,6 +164,44 @@
 
 ## 🪵 Immutable Change Log
 
+### [2026-06-30] - Implement Scenario 1 Dental Center with Google Calendar Booking
+* **Context:** User requested implementing Scenario 1 (Shri Krishna Dental Clinic, Delhi) into the live inbound agent config with real-time Google Calendar appointment booking and a 100% extensible tool gateway architecture.
+* **Scope:**
+  - `data/agent_config.json` [MODIFIED] — Replaced inbound config with full Scenario 1 dental center agent. Includes enterprise Hinglish system prompt with 4-state conversation machine, embedded RAG knowledge base (25 treatments/pricing, 3 doctor profiles, clinic hours, insurance, payments), and `query_workspace_integration` custom function registration.
+  - `agent_inbound.py` [MODIFIED] — Added generic `query_workspace_integration` Python tool that makes an internal HTTP POST to the Next.js tool gateway at `TOOL_GATEWAY_URL`. Single tool handles all real-time integrations — adding new actions requires zero Python changes. Includes 6s timeout with graceful fallback strings so call never crashes.
+  - `dashboard/app/api/tools/execute/route.ts` [NEW] — Extensible Next.js tool gateway. Switch-case handlers for `book_appointment` (Google Calendar event creation with IST timezone, Hinglish/English time parsing, clinic hours enforcement, reminders) and `check_availability` (Google freeBusy API). Reads OAuth tokens from Supabase, auto-refreshes expired tokens. Always returns 200 with a speakable string — never crashes the agent.
+  - `dashboard/app/api/auth/google/callback/route.ts` [NEW] — Unified Google OAuth callback. Handles token exchange, fetches user profile, upserts tokens to Supabase `integrations` table (server-side accessible to the tool gateway), and redirects with display data for the UI.
+  - `dashboard/app/api/auth/gmail/start/route.ts` [MODIFIED] — Added `calendar.events` scope to the OAuth request. Now redirects to `/api/auth/google/callback` (unified). Accepts `workspace_id` query param via `state` for multi-tenant token storage.
+  - `dashboard/app/(dashboard)/integrations/page.tsx` [MODIFIED] — Added Google Calendar integration card with CalendarDays icon, "Connect Google Calendar" button. Handles `gcal_success` URL param. Updated Gmail/Calendar card display to show connected account profile. Combined success toast for both Gmail and Calendar connect events.
+  - `supabase/migrations/20260630_create_integrations_table.sql` [NEW] — SQL migration to create the `integrations` table with UNIQUE(workspace_id, service), RLS enabled, updated_at trigger, and lookup indexes.
+  - `.env` [MODIFIED] — Added `TOOL_GATEWAY_URL=http://localhost:3000/api/tools/execute` for easy production override.
+* **Impact:** Inbound agent now acts as a full-featured Delhi dental clinic receptionist (Aayushi). Can book Google Calendar appointments in real-time during calls, speak confirmation in Hinglish, and gracefully degrade if Calendar is not connected. Adding any future live integration (WhatsApp, patient DB, insurance check) requires only adding a handler in the Next.js gateway switch — zero Python restarts.
+* **One-time Setup Required:** Run `supabase/migrations/20260630_create_integrations_table.sql` in Supabase dashboard. Add `http://localhost:3000/api/auth/google/callback` to Google Cloud Console Authorized Redirect URIs.
+
+### [2026-06-30] - Create Pitch Deck, SaaS Deep-Dive, & Demo Scenario Blueprints
+
+* **Context:** User requested a pitch deck outline, feature list, detailed explanation of how the SaaS voice calling platform works under the hood, 3 demo scenarios, enterprise-grade prompts/RAG files, a Google Calendar integration guide, and extensibility options using the Visual Workflow Builder.
+* **Scope:**
+  - `pitch_deck_guidelines.md` [NEW] — Structured pitch deck framework detailing cover, problem, solution, product walkthrough, latency breakthrough, multi-tenancy, GTM, pricing, and competitive matrix.
+  - `saas_application_deepdive.md` [NEW] — In-depth architectural breakdown detailing dual-agent Python microservices, Next.js page modules, Supabase RLS security, LiveKit SIP integrations, low-latency audio pipelines, and dynamic configuration workflows.
+  - `demo_scenarios.md` [NEW] — 3 production-ready demo blueprints (Inbound Dental Receptionist, Outbound Used Car Sales, Delhi Delivery Support) showcasing RAG document injection, SIP call transfer tools, Hinglish code-mixing, and automatic sentiment-based handoffs.
+  - `scenario_1_deep_prompt.md` [NEW] — Enterprise-grade system prompt for the inbound dental receptionist with structured state tracking, safety barriers, and failsafes.
+  - `scenario_1_rag_knowledge.md` [NEW] — Detailed operations, pricing, and guidelines knowledge base for the RAG engine.
+  - `scenario_2_deep_prompt.md` [NEW] — Enterprise-grade outbound sales prompt with negotiation deflection, state tracking, and call transfer safeguards.
+  - `scenario_2_rag_knowledge.md` [NEW] — Complete specifications, warranties, EMI loan sheets, and showroom logistics knowledge base for the Maruti Swift VXI sales engine.
+  - `google_calendar_integration_guide.md` [NEW] — Deep technical guide outlining direct Python agent tool integration and Next.js workflow engine webhooks with OAuth tokens.
+  - `google_calendar_recommended_approach.md` [NEW] — Architecture analysis recommending a Next.js proxy route for Python agent tool execution.
+  - `workflow_engine_orchestration.md` [NEW] — Architectural blueprint on leveraging the dashboard's visual workflow builder to dynamically execute post-call workflows (such as creating Word files and sending emails).
+  - `realtime_tool_extensibility.md` [NEW] — Architectural blueprint outlining how to hook the visual workflow engine as a middleware gateway to resolve custom tool calls dynamically during active calls.
+* **Impact:** Provides investors, clients, and developers with professional blueprints of the system's architecture, commercial strategy, and operational scripts.
+
+### [2026-06-29] - Fix Next.js Supabase Environment Variable Isolation
+* **Context:** The Next.js dashboard failed to start due to missing Supabase credentials (URL/Key) because they were placed in the root `.env` file instead of the isolated `dashboard/.env.local` file.
+* **Scope:**
+  - `dashboard/.env.local` [NEW] — Created frontend-specific environment file containing `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and other Next.js-relevant credentials.
+  - `.env` (root) — Cleaned up by removing the Next.js frontend environment variables section.
+* **Impact:** Fixed the Supabase client initialization crash in Next.js middleware, allowing `npm run dev` to start successfully.
+
 ### [2026-06-28] - Pipeline & Network Latency Optimizations
 * **Context:** Voice agent had perceptible latency in the pipeline (User → Vobiz → LiveKit → Deepgram → Gemini → Sarvam → User). Batch-style processing, long silence thresholds, verbose LLM outputs, and an older STT model all contributed to sluggish response times.
 * **Scope:**
