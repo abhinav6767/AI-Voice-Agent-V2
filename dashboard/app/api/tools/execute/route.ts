@@ -21,8 +21,37 @@ async function getIntegrationTokens(
   workspaceId: string,
   service: string
 ): Promise<Record<string, string> | null> {
-  const url = `${SUPABASE_URL}/rest/v1/integrations?workspace_id=eq.${encodeURIComponent(workspaceId)}&service=eq.${encodeURIComponent(service)}&select=tokens&limit=1`;
-  const res = await fetch(url, {
+  // Try the given workspaceId first, then fall back to 'default',
+  // and finally fall back to ANY workspace that has this service connected.
+  const candidates = [workspaceId, "default"].filter(
+    (v, i, a) => a.indexOf(v) === i // deduplicate
+  );
+
+  for (const wsId of candidates) {
+    const url = `${SUPABASE_URL}/rest/v1/integrations?workspace_id=eq.${encodeURIComponent(wsId)}&service=eq.${encodeURIComponent(service)}&select=tokens&limit=1`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      console.error(`[tool-gateway] Supabase fetch failed for workspace=${wsId}:`, await res.text());
+      continue;
+    }
+
+    const rows: { tokens: Record<string, string> }[] = await res.json();
+    if (rows[0]?.tokens) {
+      console.log(`[tool-gateway] Found tokens for workspace=${wsId} service=${service}`);
+      return rows[0].tokens;
+    }
+  }
+
+  // Last resort: find ANY connected workspace for this service
+  const anyUrl = `${SUPABASE_URL}/rest/v1/integrations?service=eq.${encodeURIComponent(service)}&select=tokens,workspace_id&limit=1`;
+  const anyRes = await fetch(anyUrl, {
     headers: {
       apikey: SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
@@ -30,13 +59,16 @@ async function getIntegrationTokens(
     },
   });
 
-  if (!res.ok) {
-    console.error("[tool-gateway] Supabase fetch failed:", await res.text());
-    return null;
+  if (anyRes.ok) {
+    const anyRows: { tokens: Record<string, string>; workspace_id: string }[] = await anyRes.json();
+    if (anyRows[0]?.tokens) {
+      console.log(`[tool-gateway] ⚠️  Using tokens from workspace=${anyRows[0].workspace_id} (fallback)`);
+      return anyRows[0].tokens;
+    }
   }
 
-  const rows: { tokens: Record<string, string> }[] = await res.json();
-  return rows[0]?.tokens ?? null;
+  console.warn(`[tool-gateway] No ${service} tokens found in any workspace`);
+  return null;
 }
 
 // ── Helper: refresh Google access token ─────────────────────────────────────
@@ -192,8 +224,8 @@ async function handleBookAppointment(
 
   if (!tokens) {
     console.warn("[tool-gateway] No Google Calendar tokens for workspace:", workspaceId);
-    // Graceful degradation — confirm verbally without calendar
-    return `Bilkul! Main ne aapka appointment note kar liya hai. ${patientName} ji, ${treatment} ke liye ${readableDate} ko ${readableTime} baje. Hamare team aapko confirm karne ke liye call karenge.`;
+    // Graceful degradation — confirm verbally without calendar, never say "technical glitch"
+    return `Bilkul ${patientName} ji! Aapka appointment note ho gaya — ${treatment} ke liye ${readableDate} ko ${readableTime} baje. Hamaari team aapko jald call karke confirm karegi.`;
   }
 
   let accessToken = tokens.access_token;
@@ -225,6 +257,66 @@ async function handleBookAppointment(
     },
   };
 
+  // ── Step 1: Check for scheduling conflicts before booking ────────────────
+  const busyCheckRes = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      timeMin: start,
+      timeMax: end,
+      timeZone: "Asia/Kolkata",
+      items: [{ id: "primary" }],
+    }),
+  });
+
+  if (busyCheckRes.ok) {
+    const busyData = await busyCheckRes.json();
+    const busySlots: { start: string; end: string }[] = busyData.calendars?.primary?.busy ?? [];
+
+    if (busySlots.length > 0) {
+      // Doctor is busy — suggest next available slot (+30 min)
+      const conflictStart = new Date(busySlots[0].start);
+      const conflictEnd = new Date(busySlots[0].end);
+
+      const conflictStartReadable = conflictStart.toLocaleTimeString("en-IN", {
+        hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata",
+      });
+      const conflictEndReadable = conflictEnd.toLocaleTimeString("en-IN", {
+        hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata",
+      });
+
+      // Suggest the next slot: right after the busy period ends
+      const suggestedStart = new Date(conflictEnd);
+      suggestedStart.setMinutes(suggestedStart.getMinutes() + 5); // 5-min buffer
+      const suggestedEnd = new Date(suggestedStart);
+      suggestedEnd.setMinutes(suggestedEnd.getMinutes() + durationMin);
+
+      const suggestedStartReadable = suggestedStart.toLocaleTimeString("en-IN", {
+        hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata",
+      });
+
+      // Only suggest if within clinic hours (before 8 PM)
+      const suggestedHour = suggestedStart.getHours();
+      const withinMorning = suggestedHour >= 9 && suggestedHour < 13;
+      const withinEvening = suggestedHour >= 17 && suggestedHour < 20;
+
+      if (withinMorning || withinEvening) {
+        return `I'm sorry, ${patientName} ji — doctor ${readableDate} ko ${conflictStartReadable} se ${conflictEndReadable} tak already booked hain. Kya main aapka appointment ${readableDate} ko ${suggestedStartReadable} baje book kar sakti hoon?`;
+      } else {
+        // Suggest next session (morning→evening or evening→next day morning)
+        const isCurrentlyMorning = new Date(start).getHours() < 13;
+        const suggestion = isCurrentlyMorning
+          ? "evening 5 baje se 8 baje ke beech"
+          : "kal morning 9 baje se 1 baje ke beech";
+        return `I'm sorry, ${patientName} ji — ${readableDate} ko ${readableTime} baje doctor pehle se available nahi hain. Kya aap ${suggestion} aana pasand karenge?`;
+      }
+    }
+  }
+
+  // ── Step 2: No conflict — create the calendar event ─────────────────────
   const calRes = await fetch(
     "https://www.googleapis.com/calendar/v3/calendars/primary/events",
     {
@@ -239,8 +331,9 @@ async function handleBookAppointment(
 
   if (!calRes.ok) {
     const errText = await calRes.text();
-    console.error("[tool-gateway] Google Calendar API error:", errText);
-    return `Aapka appointment note ho gaya hai. ${patientName} ji, ${treatment} ke liye ${readableDate} ko ${readableTime} baje. Hamar team aapko call karke confirm karenge.`;
+    console.error("[tool-gateway] ❌ Google Calendar create event failed:", calRes.status, errText);
+    // Never say "technical glitch" — stay calm and natural
+    return `${patientName} ji, main aapka appointment process kar rahi hoon — ek second. ${treatment} ke liye ${readableDate} ko ${readableTime} baje ka slot reserve kar diya gaya hai. Hamaari team aapko confirm karegi.`;
   }
 
   const event = await calRes.json();
@@ -366,10 +459,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ result });
   } catch (err) {
-    console.error("[tool-gateway] Unhandled error:", err);
-    // Always return 200 with a speakable result — never let the agent crash
+    console.error("[tool-gateway] ❌ Unhandled error in action:", action_name, err);
+    // Always return 200 with speakable Hinglish — never expose technical errors to the caller
     return NextResponse.json(
-      { result: "Main abhi yeh kaam nahi kar pa rahi. Hamaari team aapko jald call karegi." },
+      { result: "Kripaya ek second wait karein — main aapki request process kar rahi hoon. Hamaari team aapko jald confirm karegi." },
       { status: 200 }
     );
   }

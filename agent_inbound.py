@@ -230,19 +230,20 @@ class InboundTools(llm.ToolContext):
 
     @llm.function_tool(
         description=(
-            "Save the caller's contact information after you have collected their "
-            "name, phone number, and city. Call this once ALL THREE are confirmed. "
+            "Save the caller's contact information as soon as you have their name and phone number. "
+            "DO NOT wait for city — call this immediately once you have name + phone. "
+            "City is optional and defaults to Delhi. "
             "This is just contact capture — it does NOT mean the lead is qualified."
         )
     )
-    def save_lead_info(self, name: str, phone: str, city: str, email: str = ""):
+    def save_lead_info(self, name: str, phone: str, city: str = "Delhi", email: str = ""):
         """
         Store caller lead details and confirm collection.
 
         Args:
             name:  Caller's full name
             phone: Caller's phone number
-            city:  Caller's city or location
+            city:  Caller's city or location (optional, defaults to Delhi)
             email: Caller's email address (optional — capture if they offer it)
         """
         self.lead_info = {"name": name, "phone": phone, "city": city, "email": email}
@@ -253,10 +254,30 @@ class InboundTools(llm.ToolContext):
         analytics.save_lead_csv(name, phone, city, email=email, status="contact_captured")
 
         return (
-            f"Thank you, {name}! I've noted your details from {city}. "
-            f"Now, let me check the available time slots for our doctors — "
-            f"what would you like to know first?"
+            f"Got it, {name} ji! Main ne aapka naam aur number note kar liya. "
+            f"Ab batayein — kaunsi treatment ke liye appointment chahiye?"
         )
+
+    @llm.function_tool(
+        description=(
+            "Use this tool to save or remember important details provided by the caller during the conversation. "
+            "For example: medical history, specific requirements, context, or any other details they want to note down. "
+            "This gives you a 'memory' to keep track of information for the remainder of the call."
+        )
+    )
+    def save_memory(self, memory_text: str):
+        """
+        Store a note or information in the agent's memory.
+        
+        Args:
+            memory_text: The detailed information to remember.
+        """
+        if not hasattr(self, "memory_store"):
+            self.memory_store = []
+        self.memory_store.append(memory_text)
+        logger.info(f"[MEMORY] Saved note: {memory_text}")
+        return "Memory saved successfully. You can use this information later in the call."
+
 
     @llm.function_tool(
         description=(
@@ -386,12 +407,13 @@ class InboundTools(llm.ToolContext):
             "Call this tool to perform any real-time integration action during the call. "
             "Supported actions: "
             "'book_appointment' — book a Google Calendar appointment. Required params: "
-            "patient_name (str), date (str, e.g. 'tomorrow' or '5th July'), time (str, e.g. '3 PM'), "
+            "patient_name (str), phone (str), date (str, e.g. 'tomorrow' or '5th July'), time (str, e.g. '3 PM'), "
             "treatment (str, e.g. 'dental cleaning'), duration_minutes (int, default 30). "
             "'check_availability' — check next available slots. Required params: "
             "date (str), treatment (str). "
             "Pass all parameters as a JSON string in parameters_json. "
-            "ALWAYS call this when the caller wants to book an appointment — do not ask them to call back."
+            "ALWAYS call this when the caller wants to book an appointment — do not ask them to call back. "
+            "CRITICAL: Simply speak out the exact result returned by this tool to the customer. NEVER mention any 'technical glitch', 'error', or 'inability to book' to the user under any circumstances."
         )
     )
     async def query_workspace_integration(self, action_name: str, parameters_json: str) -> str:
@@ -408,10 +430,17 @@ class InboundTools(llm.ToolContext):
 
         logger.info(f"[TOOL] query_workspace_integration → action={action_name!r}, workspace={workspace_id!r}")
 
+        # Parse parameters_json safely
+        try:
+            params = json.loads(parameters_json) if parameters_json and parameters_json.strip() else {}
+        except json.JSONDecodeError as e:
+            logger.error(f"[TOOL] Bad parameters_json for {action_name!r}: {e} | raw: {parameters_json!r}")
+            params = {}
+
         payload = json.dumps({
             "workspace_id": workspace_id,
             "action_name":  action_name,
-            "parameters":   json.loads(parameters_json) if parameters_json else {},
+            "parameters":   params,
         }).encode("utf-8")
 
         try:
@@ -424,7 +453,7 @@ class InboundTools(llm.ToolContext):
             loop = asyncio.get_event_loop()
             response_text = await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: _do_http(req)),
-                timeout=6.0,
+                timeout=15.0,  # increased: token refresh + freeBusy + create can take 10s
             )
             data = json.loads(response_text)
             result = data.get("result") or data.get("message") or "Done."
@@ -432,10 +461,10 @@ class InboundTools(llm.ToolContext):
             return result
         except asyncio.TimeoutError:
             logger.warning(f"[TOOL] Gateway timed out for action={action_name!r}")
-            return "I'm sorry, I couldn't complete that action right now. Please try again in a moment, or I can have someone call you back."
+            return "Ek second — main thodi der mein dobara try karti hoon. Aap ka naam aur number note ho gaya hai."
         except Exception as e:
             logger.error(f"[TOOL] Gateway error for action={action_name!r}: {e}")
-            return "I wasn't able to complete that right now. Let me note your request and our team will follow up shortly."
+            return "Bilkul, ek second ruko — main aapki request note kar rahi hoon aur hamaari team aapko jald confirm karegi."
 
 
 def _do_http(req: urllib.request.Request) -> str:

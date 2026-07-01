@@ -633,7 +633,7 @@ export async function getWalletData(): Promise<WalletData> {
 
   try {
     // ── 1. Fetch account balance + first billing page + CDRs in parallel
-    const accountResPromise = fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/`, { headers, next: { revalidate: 60 } }).catch(() => null);
+    const accountResPromise = fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/`, { headers, cache: 'no-store' }).catch(() => null);
     
     // We run the pagination helpers concurrently for faster loading
     const [accountRes, allBillingItems, cdrs] = await Promise.all([
@@ -743,7 +743,7 @@ async function fetchAllVobizCdrs(authId: string, headers: any): Promise<any[]> {
   
   while (hasMore && pageCount < 20) {
     try {
-      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/cdr/recent?limit=100&offset=${offset}`, { headers, next: { revalidate: 60 } });
+      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/cdr/recent?limit=100&offset=${offset}`, { headers, cache: 'no-store' });
       if (res.ok) {
         const json = await res.json();
         if (json?.success && json?.data && json.data.length > 0) {
@@ -773,7 +773,7 @@ async function fetchAllVobizTranscripts(authId: string, headers: any): Promise<a
   
   while (hasMore && pageCount < 20) {
     try {
-      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/Transcriptions/?limit=100&offset=${offset}`, { headers, next: { revalidate: 60 } });
+      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/Transcriptions/?limit=100&offset=${offset}`, { headers, cache: 'no-store' });
       if (res.ok) {
         const json = await res.json();
         const items = json?.objects ?? json?.data ?? json?.results ?? [];
@@ -804,7 +804,7 @@ async function fetchAllVobizRecordings(authId: string, headers: any): Promise<an
   
   while (hasMore && pageCount < 20) {
     try {
-      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/Recording/?limit=100&offset=${offset}`, { headers, next: { revalidate: 60 } });
+      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/Recording/?limit=100&offset=${offset}`, { headers, cache: 'no-store' });
       if (res.ok) {
         const json = await res.json();
         const items = json?.objects ?? json?.data ?? json?.results ?? [];
@@ -835,7 +835,7 @@ async function fetchAllVobizBilling(authId: string, headers: any): Promise<any[]
   
   while (hasMore && pageCount < 20) {
     try {
-      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/Billing/?limit=100&offset=${offset}`, { headers, next: { revalidate: 60 } });
+      const res = await fetch(`https://api.vobiz.ai/api/v1/Account/${authId}/Billing/?limit=100&offset=${offset}`, { headers, cache: 'no-store' });
       if (res.ok) {
         const json = await res.json();
         const items = json?.objects ?? json?.data ?? json?.results ?? [];

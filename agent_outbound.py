@@ -246,6 +246,26 @@ class OutboundTools(llm.ToolContext):
 
     @llm.function_tool(
         description=(
+            "Use this tool to save or remember important details provided by the caller during the conversation. "
+            "For example: medical history, specific requirements, context, or any other details they want to note down. "
+            "This gives you a 'memory' to keep track of information for the remainder of the call."
+        )
+    )
+    def save_memory(self, memory_text: str):
+        """
+        Store a note or information in the agent's memory.
+        
+        Args:
+            memory_text: The detailed information to remember.
+        """
+        if not hasattr(self, "memory_store"):
+            self.memory_store = []
+        self.memory_store.append(memory_text)
+        logger.info(f"[MEMORY] Saved note: {memory_text}")
+        return "Memory saved successfully. You can use this information later in the call."
+
+    @llm.function_tool(
+        description=(
             "ALWAYS call this tool the moment the customer says anything like "
             "'I want to talk to a person', 'connect me to someone', 'can I speak to a human', "
             "'I don't want to talk to a bot', 'get me a real person', or similar — regardless "
