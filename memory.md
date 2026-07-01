@@ -1,5 +1,26 @@
 # Project Memory & System Architecture
 
+---
+## Changelog
+
+### 2026-07-02 - Outbound Dialer Restructure + Campaign Templates
+Changed: AgentConfigForm.tsx — hides Agent Identity / System Prompt / Knowledge Base sections when mode=outbound (outbound uses per-call prompts, not global config). Added blue info banner.
+Changed: CallDispatcher.tsx (Single Dispatch) — fully rewrote to include Agent Persona (system prompt, name, greeting), Knowledge Base (RAG upload), and Additional Call Context sections. Custom system prompt fully overrides base config via overrideSystemPrompt flag.
+Changed: BulkDialer.tsx — added agentName + greeting fields to Step 3; added Campaign Templates panel (save/load/delete configs by name). Template picker at top of form.
+Changed: agent_outbound.py — is_campaign_call now also triggers on override_system_prompt flag from Single Dispatch.
+New: /api/campaign/templates/route.ts — GET/POST/DELETE routes for campaign template CRUD.
+New: supabase/migrations/20260702_create_campaign_templates.sql — campaign_templates table (requires manual run in Supabase SQL editor).
+Note: BulkDialer dispatch still sends agentName and greeting in leadData; backend uses them via user_prompt. Further backend integration for greeting field TBD.
+
+### 2026-07-01 - Phase 1: Enhanced BulkDialer Campaign System
+Changed: BulkDialer.tsx (rebuilt), dispatch/route.ts (lead fields), analytics.py (campaign tracking), agent_outbound.py (RAG injection), .env (DASHBOARD_URL)
+New: campaign/upload-rag, campaign/results, campaign/download API routes
+New packages: xlsx, pdf-parse, mammoth
+Next: Phase 2 - Workflow Execution Engine
+
+---
+
+
 ## 🏗️ Core Architecture & System Flow
 
 ### System Design
@@ -78,6 +99,18 @@
 |------|-------|----------|
 | `.env` (root) | **Backend Python only** | LiveKit, Deepgram, Groq, Sarvam, Vobiz/SIP credentials |
 # Project Memory & System Architecture
+
+---
+## Changelog
+
+### 2026-07-01 - Phase 1: Enhanced BulkDialer Campaign System
+Changed: BulkDialer.tsx (rebuilt), dispatch/route.ts (lead fields), analytics.py (campaign tracking), agent_outbound.py (RAG injection), .env (DASHBOARD_URL)
+New: campaign/upload-rag, campaign/results, campaign/download API routes
+New packages: xlsx, pdf-parse, mammoth
+Next: Phase 2 - Workflow Execution Engine
+
+---
+
 
 ## 🏗️ Core Architecture & System Flow
 

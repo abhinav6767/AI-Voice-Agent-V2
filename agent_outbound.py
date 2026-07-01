@@ -353,14 +353,26 @@ class OutboundTools(llm.ToolContext):
 # =============================================================================
 
 class OutboundAssistant(Agent):
-    def __init__(self, ws_config: WorkspaceAgentConfig, tools: list, user_prompt: str = None, tts_language: str = None):
-        if user_prompt and user_prompt.strip():
+    def __init__(self, ws_config: WorkspaceAgentConfig, tools: list, user_prompt: str = None, tts_language: str = None, is_campaign: bool = False):
+        
+        logger.info(f"[OUTBOUND-DEBUG] OutboundAssistant init. is_campaign={is_campaign}")
+        logger.info(f"[OUTBOUND-DEBUG] user_prompt: {repr(user_prompt)}")
+        logger.info(f"[OUTBOUND-DEBUG] base system_prompt: {repr(ws_config.system_prompt)}")
+        
+        if is_campaign and user_prompt and user_prompt.strip():
+            # For campaigns, the campaign prompt completely overrides the base outbound config
+            # to prevent persona clashes.
+            instructions = user_prompt.strip()
+            logger.info("[OUTBOUND-DEBUG] Selected instructions source: is_campaign override")
+        elif user_prompt and user_prompt.strip():
             instructions = (
                 f"{ws_config.system_prompt}\n\n"
                 f"## Additional Context for This Call:\n{user_prompt.strip()}"
             )
+            logger.info("[OUTBOUND-DEBUG] Selected instructions source: base config + user_prompt")
         else:
             instructions = ws_config.system_prompt
+            logger.info("[OUTBOUND-DEBUG] Selected instructions source: base config only")
             
         # ── Telephony voice style prompt (latency optimization) ──
         instructions += (
@@ -439,6 +451,63 @@ async def entrypoint(ctx: agents.JobContext):
     workspace_id = config_dict.get("business_id") or config_dict.get("workspace_id")
     ws_config = await load_workspace_config(workspace_id, mode="outbound")
 
+    # --- Campaign / lead enrichment fields (set by BulkDialer and Workflow engine) ---
+    lead_name       = config_dict.get("lead_name", "")
+    lead_email      = config_dict.get("lead_email", "")
+    lead_data       = config_dict.get("lead_data", {})   # extra spreadsheet columns
+    rag_content     = config_dict.get("rag_content", "") # extracted text from uploaded RAG file
+    campaign_id     = config_dict.get("campaign_id", "")
+    lead_row_index  = config_dict.get("lead_row_index", -1)
+    workflow_run_id = config_dict.get("workflow_run_id", "")
+    override_system_prompt = config_dict.get("override_system_prompt", False)
+    metadata_greeting = config_dict.get("initial_greeting", "")
+    metadata_agent_name = config_dict.get("agent_name", "")
+
+    is_campaign_call = bool(campaign_id or workflow_run_id or override_system_prompt)
+
+    # Override ws_config fields if provided dynamically via manual dialer or bulk dialer
+    if metadata_greeting and metadata_greeting.strip():
+        ws_config.initial_greeting = metadata_greeting.strip()
+        logger.info(f"[OUTBOUND] Overriding initial greeting: {ws_config.initial_greeting!r}")
+    
+    if not ws_config.initial_greeting:
+        ws_config.initial_greeting = "Hello?"
+        logger.info("[OUTBOUND] No initial greeting set, defaulting to 'Hello?'")
+
+    # Inject RAG content and lead context
+    user_prompt = config_dict.get("user_prompt", "")
+    
+    rag_block = ""
+    if rag_content and rag_content.strip():
+        rag_block = (
+            "\n\n## Knowledge Base (Use this information to answer questions during the call):\n"
+            + rag_content.strip()
+        )
+        logger.info(f"[OUTBOUND] RAG content loaded ({len(rag_content)} chars)")
+
+    if is_campaign_call:
+        # For campaigns, we override the base system prompt entirely.
+        # So we append RAG directly to the user_prompt.
+        if rag_block:
+            user_prompt += rag_block
+    else:
+        # For manual 1-off calls, RAG appends to the base system prompt.
+        if rag_block:
+            ws_config.system_prompt += rag_block
+
+    # Build a lead-context string to prepend to the user_prompt
+    if lead_name or lead_data:
+        lead_context_parts = []
+        if lead_name:
+            lead_context_parts.append(f"You are calling {lead_name}.")
+        if lead_data and isinstance(lead_data, dict):
+            extras = ", ".join(f"{k}: {v}" for k, v in lead_data.items() if v)
+            if extras:
+                lead_context_parts.append(f"Their details — {extras}.")
+        lead_context = " ".join(lead_context_parts)
+        user_prompt = f"{lead_context}\n\n{user_prompt}".strip()
+        logger.info(f"[OUTBOUND] Lead context injected: {lead_context!r}")
+
     # --- Build plugins ---
     fnc_ctx   = OutboundTools(ctx, ws_config, phone_number)
     built_tts = _build_tts(
@@ -482,23 +551,23 @@ async def entrypoint(ctx: agents.JobContext):
             },
         ),
     )
-    
+
     # Link session to tools for dynamic language switching
     fnc_ctx.agent_session = session
 
-    user_prompt = config_dict.get("user_prompt", "")
     agent_instance = OutboundAssistant(
         ws_config=ws_config,
         tools=list(fnc_ctx.function_tools.values()),
         user_prompt=user_prompt,
-        tts_language=config_dict.get("tts_language")
+        tts_language=config_dict.get("tts_language"),
+        is_campaign=is_campaign_call
     )
     
     # Capitalize the voice ID so it displays nicely (e.g. "Ishita" instead of "ishita")
     raw_voice_id = config_dict.get("voice_id", "")
-    agent_name = raw_voice_id.capitalize() if raw_voice_id else "AI Agent"
+    final_agent_name = metadata_agent_name.strip() if metadata_agent_name.strip() else (raw_voice_id.capitalize() if raw_voice_id else "AI Agent")
     if hasattr(ctx.room.local_participant, "update_name"):
-        await ctx.room.local_participant.update_name(agent_name)
+        await ctx.room.local_participant.update_name(final_agent_name)
 
     @ctx.room.on("disconnected")
     def on_disconnected(*args, **kwargs):
@@ -509,7 +578,12 @@ async def entrypoint(ctx: agents.JobContext):
             analytics.analyze_and_save_call(
                 phone_number=phone_number or "unknown",
                 direction="outbound",
-                chat_messages=msgs
+                chat_messages=msgs,
+                campaign_id=campaign_id,
+                lead_row_index=lead_row_index,
+                lead_email=lead_email,
+                workflow_run_id=workflow_run_id,
+                room_name=ctx.room.name,
             )
         )
 

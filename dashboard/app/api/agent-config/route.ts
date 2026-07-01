@@ -33,12 +33,12 @@ const DEFAULTS: Record<string, any> = {
     ]
   },
   outbound: {
-    agent_name: "School Receptionist",
+    agent_name: "",
     gender: "female",
-    call_description: "Outbound call agent acting as school receptionist for Kendriya Vidyalaya No 1 Gurugram.",
+    call_description: "",
     system_prompt: "",
-    initial_greeting: "The user has picked up the call. Introduce yourself as the School Receptionist immediately.",
-    fallback_greeting: "Greet the user immediately as the School Receptionist.",
+    initial_greeting: "",
+    fallback_greeting: "",
     stt_provider: "deepgram",
     stt_model: "nova-2",
     stt_language: "en",

@@ -538,7 +538,23 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
         </div>
       )}
 
-      {/* Section 1: Agent Identity */}
+      {/* Info banner — outbound only */}
+      {mode === "outbound" && (
+        <div className="flex items-start gap-3 bg-blue-50/80 dark:bg-[#2f81f7]/10 border border-blue-200/60 dark:border-[#2f81f7]/30 rounded-xl p-4 shadow-sm">
+          <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-[#2f81f7]/20 text-blue-600 dark:text-[#2f81f7] flex-shrink-0 mt-0.5">
+            <MessageSquare className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-blue-800 dark:text-[#79c0ff] mb-0.5">Agent persona is configured per-call</p>
+            <p className="text-xs text-blue-700 dark:text-[#8b949e] leading-relaxed">
+              System prompt, agent identity, and knowledge base are set when you dispatch a call — in <strong>Single Dispatch</strong> or <strong>Bulk Campaign</strong>. This page only stores your default voice, model, and telephony settings.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Section 1: Agent Identity — inbound only */}
+      {mode !== "outbound" && (
       <Section icon={Bot} title="Agent Identity" subtitle="Name and purpose of this AI agent" accentColor="blue">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -591,8 +607,10 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
           />
         </div>
       </Section>
+      )}
 
-      {/* Section 2: System Prompt & Greetings */}
+      {/* Section 2: System Prompt & Greetings — inbound only */}
+      {mode !== "outbound" && (
       <Section icon={MessageSquare} title="System Prompt & Greetings" subtitle="The core instructions and personality for the AI" accentColor="purple">
         <div>
           <div className="flex items-center justify-between mb-1.5">
@@ -648,8 +666,10 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
           </div>
         </div>
       </Section>
+      )}
 
-      {/* Section 3: Resources / Knowledge Base */}
+      {/* Section 3: Resources / Knowledge Base — inbound only */}
+      {mode !== "outbound" && (
       <Section icon={Sparkles} title="Resources & Knowledge Base" subtitle="Add URLs, files, or text content as reference material for the AI" accentColor="cyan">
         {config.resources.length > 0 && (
           <div className="space-y-2">
@@ -755,6 +775,7 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
           </p>
         )}
       </Section>
+      )}
 
       {/* Section 4: Voice & Speech Settings — FULLY DYNAMIC */}
       <Section icon={Volume2} title="Voice & Speech Settings" subtitle="Text-to-speech and speech-to-text configuration" accentColor="green">

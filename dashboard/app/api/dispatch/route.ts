@@ -47,6 +47,19 @@ export async function POST(request: Request) {
         const body = await request.json();
         const { phoneNumber, prompt, modelProvider, voice } = body;
 
+        // Campaign / lead enrichment fields (optional — used by BulkDialer + Workflow engine)
+        const leadName       = body.leadName       || "";
+        const leadEmail      = body.leadEmail      || "";
+        const leadData       = body.leadData       || {};   // extra columns from spreadsheet
+        const ragContent     = body.ragContent     || "";   // extracted text from RAG file
+        const campaignId     = body.campaignId     || "";   // ties call log to campaign result file
+        const leadRowIndex   = body.leadRowIndex   ?? -1;   // row number in original leads file
+        const workflowRunId  = body.workflowRunId  || "";   // set when triggered from Workflow engine
+        
+        const overrideSystemPrompt = body.overrideSystemPrompt || false;
+        const greeting             = body.greeting || "";
+        const agentName            = body.agentName || "";
+
         if (!phoneNumber) {
             return NextResponse.json({ error: "Phone number is required" }, { status: 400 });
         }
@@ -74,14 +87,25 @@ export async function POST(request: Request) {
         const participantIdentity = `sip_${phoneNumber}`;
 
         const metadata = JSON.stringify({
-            phone_number: phoneNumber,
-            user_prompt: prompt || "",
-            model_provider: modelProvider || "openai",
-            voice_id: voice || "alloy",
-            tts_provider: body.ttsProvider,
-            tts_language: body.ttsLanguage,
-            workspace_id: workspaceId,
-            triggered_by: user.email,
+            phone_number:     phoneNumber,
+            user_prompt:      prompt || "",
+            model_provider:   modelProvider || "openai",
+            voice_id:         voice || "alloy",
+            tts_provider:     body.ttsProvider,
+            tts_language:     body.ttsLanguage,
+            workspace_id:     workspaceId,
+            triggered_by:     user.email,
+            // Campaign / lead enrichment (populated by BulkDialer & Workflow engine)
+            lead_name:        leadName,
+            lead_email:       leadEmail,
+            lead_data:        leadData,
+            rag_content:      ragContent,
+            campaign_id:      campaignId,
+            lead_row_index:   leadRowIndex,
+            workflow_run_id:  workflowRunId,
+            override_system_prompt: overrideSystemPrompt,
+            initial_greeting: greeting,
+            agent_name:       agentName,
         });
 
         console.log(`[DISPATCH] Step 1: Creating room ${roomName}`);

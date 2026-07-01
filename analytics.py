@@ -23,7 +23,16 @@ def save_lead_csv(name: str, phone: str, city: str, email: str = "", status: str
     except Exception as e:
         logger.error(f"[ANALYTICS] Failed to save lead: {e}")
 
-async def analyze_and_save_call(phone_number: str, direction: str, chat_messages: list):
+async def analyze_and_save_call(
+    phone_number: str,
+    direction: str,
+    chat_messages: list,
+    campaign_id: str = "",       # ties this call to a BulkDialer / Workflow campaign
+    lead_row_index: int = -1,    # row number in the original leads spreadsheet
+    lead_email: str = "",        # lead's email address (for workflow engine)
+    workflow_run_id: str = "",   # set when triggered by the Workflow engine
+    room_name: str = "",         # LiveKit room name (used for workflow webhook)
+):
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         
@@ -80,7 +89,10 @@ async def analyze_and_save_call(phone_number: str, direction: str, chat_messages
             "sentiment": analysis.get("sentiment", "Neutral"),
             "caller_intent": analysis.get("caller_intent", "Unknown"),
             "user_info": analysis.get("user_info", {}),
-            "transcript": full_transcript
+            "transcript": full_transcript,
+            # Campaign tracking fields
+            "campaign_id": campaign_id,
+            "lead_row_index": lead_row_index,
         }
         
         logs.append(log_entry)
@@ -89,15 +101,69 @@ async def analyze_and_save_call(phone_number: str, direction: str, chat_messages
             json.dump(logs, f, indent=2)
             
         logger.info("[ANALYTICS] Call log and sentiment saved.")
-        
-        # Automatically save all inbound calls as leads if they have info
-        if direction == "inbound":
-            user_info = analysis.get("user_info", {})
-            name = user_info.get("name", "Unknown")
-            city = user_info.get("city", "")
-            email = user_info.get("email", "")
-            intent = analysis.get("caller_intent", "")
-            save_lead_csv(name, phone_number, city, email, "contact_captured", intent)
-        
+
+        # ── Campaign result file (BulkDialer report) ─────────────────────────
+        # Write per-lead result so the dashboard can poll for live progress
+        # and generate the downloadable report at campaign end.
+        if campaign_id:
+            campaign_file = os.path.join(DATA_DIR, f"campaign_{campaign_id}.json")
+            campaign_results = []
+            if os.path.exists(campaign_file):
+                try:
+                    with open(campaign_file, "r", encoding="utf-8") as f:
+                        campaign_results = json.load(f)
+                except Exception:
+                    pass
+
+            # Determine call status
+            if not full_transcript.strip():
+                call_status = "No Answer"
+            else:
+                call_status = "Called"
+
+            campaign_results.append({
+                "row_index":    lead_row_index,
+                "phone_number": phone_number,
+                "lead_email":   lead_email,
+                "status":       call_status,
+                "remarks":      analysis.get("summary", ""),
+                "sentiment":    analysis.get("sentiment", "Neutral"),
+                "intent":       analysis.get("caller_intent", "Unknown"),
+                "timestamp":    datetime.datetime.now().isoformat(),
+            })
+
+            with open(campaign_file, "w", encoding="utf-8") as f:
+                json.dump(campaign_results, f, indent=2)
+
+            logger.info(f"[ANALYTICS] Campaign result written to campaign_{campaign_id}.json (row {lead_row_index})")
+
+        # ── Workflow engine webhook ───────────────────────────────────────────
+        # When this call was triggered by the Workflow engine, notify it that
+        # the call has completed so it can proceed to the next workflow node.
+        if workflow_run_id and room_name:
+            try:
+                import urllib.request as _req
+                dashboard_url = os.getenv("DASHBOARD_URL", "http://localhost:3000").rstrip("/")
+                webhook_payload = json.dumps({
+                    "roomName":     room_name,
+                    "campaignId":   workflow_run_id,
+                    "phoneNumber":  phone_number,
+                    "summary":      analysis.get("summary", ""),
+                    "sentiment":    analysis.get("sentiment", "Neutral"),
+                    "callerIntent": analysis.get("caller_intent", "Unknown"),
+                    "status":       "completed" if full_transcript.strip() else "no_answer",
+                }).encode()
+                webhook_req = _req.Request(
+                    f"{dashboard_url}/api/workflow/call-completed",
+                    data=webhook_payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                _req.urlopen(webhook_req, timeout=10)
+                logger.info(f"[ANALYTICS] Workflow webhook fired for run {workflow_run_id}")
+            except Exception as wb_err:
+                logger.warning(f"[ANALYTICS] Workflow webhook failed (non-fatal): {wb_err}")
+
     except Exception as e:
         logger.error(f"[ANALYTICS] Failed to analyze/save call log: {e}")
+
