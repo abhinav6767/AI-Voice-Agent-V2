@@ -69,16 +69,37 @@ export async function getCallLogs() {
     // 3. Merge Local Logs and Vobiz CDRs
     let mergedLogs: any[] = [];
     
+    const matchedLocalLogIndices = new Set<number>();
+
     // Process all Vobiz CDRs first
     vobizCdrs.forEach((cdr: any) => {
       const normalizedDest = cdr.destination_number?.replace("+", "");
       const normalizedCaller = cdr.caller_id_number?.replace("+", "");
       
-      // Find matching local log
-      const localMatch = localLogs.find((log: any) => 
-        log.phone_number?.replace("+", "") === normalizedDest || 
-        log.phone_number?.replace("+", "") === normalizedCaller
-      );
+      const cdrTime = new Date(cdr.start_time || new Date()).getTime();
+
+      // Find matching local log - closest in time that hasn't been matched yet
+      let bestMatchIndex = -1;
+      let minTimeDiff = Infinity;
+
+      localLogs.forEach((log: any, index: number) => {
+        if (matchedLocalLogIndices.has(index)) return;
+        
+        const logPhone = log.phone_number?.replace("+", "");
+        if (logPhone === normalizedDest || logPhone === normalizedCaller) {
+          const logTime = new Date(log.timestamp).getTime();
+          const diff = Math.abs(logTime - cdrTime);
+          if (diff < minTimeDiff && diff < 1000 * 60 * 60) { // within 1 hour
+            minTimeDiff = diff;
+            bestMatchIndex = index;
+          }
+        }
+      });
+      
+      const localMatch = bestMatchIndex !== -1 ? localLogs[bestMatchIndex] : undefined;
+      if (bestMatchIndex !== -1) {
+        matchedLocalLogIndices.add(bestMatchIndex);
+      }
       
       // Find matching Vobiz Transcript and Recording
       const vobizTranscript = vobizTranscripts.find((t: any) => t.call_uuid === cdr.sip_call_id);
@@ -123,13 +144,8 @@ export async function getCallLogs() {
     });
 
     // Process any local logs that didn't have a matching CDR
-    localLogs.forEach((log: any) => {
-      const normalizedLocalPhone = log.phone_number?.replace("+", "");
-      const hasCdrMatch = mergedLogs.some(m => 
-        m.phone_number?.replace("+", "") === normalizedLocalPhone
-      );
-      
-      if (!hasCdrMatch) {
+    localLogs.forEach((log: any, index: number) => {
+      if (!matchedLocalLogIndices.has(index)) {
         const idStr = `${log.timestamp}-${log.phone_number}`;
         const id = crypto.createHash('md5').update(idStr).digest('hex').substring(0, 8);
         const wordCount = log.transcript ? log.transcript.split(" ").length : 0;

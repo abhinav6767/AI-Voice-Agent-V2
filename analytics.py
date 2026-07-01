@@ -90,5 +90,14 @@ async def analyze_and_save_call(phone_number: str, direction: str, chat_messages
             
         logger.info("[ANALYTICS] Call log and sentiment saved.")
         
+        # Automatically save all inbound calls as leads if they have info
+        if direction == "inbound":
+            user_info = analysis.get("user_info", {})
+            name = user_info.get("name", "Unknown")
+            city = user_info.get("city", "")
+            email = user_info.get("email", "")
+            intent = analysis.get("caller_intent", "")
+            save_lead_csv(name, phone_number, city, email, "contact_captured", intent)
+        
     except Exception as e:
         logger.error(f"[ANALYTICS] Failed to analyze/save call log: {e}")
