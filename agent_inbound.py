@@ -67,10 +67,12 @@ from workspace_config_loader import load_workspace_config, WorkspaceAgentConfig
 logger.info("[INBOUND] Agent initialized")
 
 # Pre-load VAD model at startup (avoids cold-load delay on first call)
-# Setting min_silence_duration to 0.2s for faster interruption response
+# Tuned for telephony: fast onset detection + tighter silence window
 _VAD = silero.VAD.load(
-    min_silence_duration=0.2,
-    activation_threshold=0.3,   # Lower threshold = more sensitive to speech onset
+    min_silence_duration=0.15,    # 150ms silence before VAD declares end-of-speech (tighter)
+    activation_threshold=0.25,    # Lower = starts transcribing sooner on soft speech onsets
+    min_speech_duration=0.05,     # 50ms minimum to count as speech (filters DTMF tones & pops)
+    sample_rate=16000,             # Match Deepgram's ingestion sample rate — no resampling overhead
 )
 
 
@@ -100,7 +102,8 @@ def _build_tts(ws_config: WorkspaceAgentConfig, provider_override: str = None, v
         model    = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
         voice    = voice_override or ws_config.tts_voice or os.getenv("SARVAM_VOICE", "ishita")
         language = language_override or ws_config.tts_language or os.getenv("SARVAM_LANGUAGE", "en-IN")
-        logger.info(f"[TTS] Sarvam — model={model}, speaker={voice}, lang={language}")
+        logger.info(f"[TTS] Sarvam -- model={model}, speaker={voice}, lang={language}")
+        # Note: Sarvam bulbul:v3 speech speed is controlled via the dashboard Speech Speed slider
         return sarvam.TTS(model=model, speaker=voice, target_language_code=language)
     if provider == "deepgram":
         return deepgram.TTS(model=os.getenv("DEEPGRAM_TTS_MODEL", "aura-asteria-en"))
@@ -157,19 +160,14 @@ def _build_llm(ws_config: WorkspaceAgentConfig, provider_override: str = None):
             or (ws_config.llm_model if "gemini" in config_model else None)
             or "gemini-2.5-flash-latest"
         )
-        if gemini_key and _HAS_GOOGLE:
-            logger.info(f"[LLM] Google Gemini (native plugin) — model={gemini_model}")
-            return google_plugin.LLM(
-                model=gemini_model,
-                api_key=gemini_key,
-                temperature=float(os.getenv("GROQ_TEMPERATURE", str(ws_config.llm_temperature))),
-            )
         if gemini_key:
-            logger.warning("[LLM] Google plugin unavailable — using Gemini OpenAI-compatible endpoint")
+            # Use Gemini's OpenAI-compatible endpoint for maximum stability and lower latency
+            logger.info(f"[LLM] Google Gemini (OpenAI endpoint) — model={gemini_model}")
             return openai.LLM(
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 api_key=gemini_key,
                 model=gemini_model,
+                temperature=float(os.getenv("GROQ_TEMPERATURE", str(ws_config.llm_temperature))),
             )
         logger.warning("[LLM] Google requested but no API key found — falling back to Groq")
 
@@ -538,7 +536,7 @@ class InboundAssistant(Agent):
         because it runs OUTSIDE the turn loop.
         """
         logger.info("[INBOUND] on_enter — dispatching welcome greeting via turn loop.")
-        self.session.say(self._initial_greeting, allow_interruptions=True)
+        await self.session.say(self._initial_greeting, allow_interruptions=True)
 
 
 # =============================================================================
@@ -574,6 +572,33 @@ async def entrypoint(ctx: agents.JobContext):
     workspace_id = config_dict.get("business_id") or config_dict.get("workspace_id")
     ws_config = await load_workspace_config(workspace_id, mode="inbound")
 
+    # ── Apply live per-call overrides from UI metadata ──────────────────────────
+    # These fields are set by the dashboard on every call so the agent always
+    # reflects what the user last configured in the UI — no restart needed.
+    meta_system_prompt     = config_dict.get("system_prompt", "").strip()
+    meta_llm_model         = config_dict.get("llm_model", "").strip()
+    meta_llm_temperature   = config_dict.get("llm_temperature")
+    meta_initial_greeting  = config_dict.get("initial_greeting", "").strip()
+    meta_fallback_greeting = config_dict.get("fallback_greeting", "").strip()
+
+    if meta_system_prompt:
+        ws_config.system_prompt = meta_system_prompt
+        logger.info(f"[INBOUND] Config override: system_prompt from metadata ({len(meta_system_prompt)} chars)")
+    if meta_llm_model:
+        ws_config.llm_model = meta_llm_model
+        logger.info(f"[INBOUND] Config override: llm_model={meta_llm_model!r}")
+    if meta_llm_temperature is not None:
+        try:
+            ws_config.llm_temperature = float(meta_llm_temperature)
+            logger.info(f"[INBOUND] Config override: llm_temperature={ws_config.llm_temperature}")
+        except (TypeError, ValueError):
+            pass
+    if meta_initial_greeting:
+        ws_config.initial_greeting = meta_initial_greeting
+        logger.info(f"[INBOUND] Config override: initial_greeting from metadata")
+    if meta_fallback_greeting:
+        ws_config.fallback_greeting = meta_fallback_greeting
+
     # --- Build plugins ---
     fnc_ctx   = InboundTools(ctx, ws_config)
     built_tts = _build_tts(
@@ -597,22 +622,26 @@ async def entrypoint(ctx: agents.JobContext):
         stt=deepgram.STT(
             model=stt_model,
             language=stt_lang,
-            interim_results=True,
+            interim_results=True,   # Stream partial transcripts word-by-word as user speaks
             smart_format=True,
         ),
         llm=built_llm,
         tts=built_tts,
-        # ── Latency-optimized turn handling ──
-        # 400ms min_delay = agent responds quickly after user pauses
-        # Adaptive interruption = clears TTS buffer when user speaks over the bot
         turn_handling=TurnHandlingOptions(
-            turn_detection="vad",    # Pure VAD-based turn detection (valid: 'stt', 'vad', 'realtime_llm', 'manual')
+            turn_detection="vad",
             endpointing={
-                "min_delay": 0.4,    # 400ms silence → assume user is done (telephony sweet spot)
-                "max_delay": 1.5,    # Safety cap — force turn closure after 1.5s
+                "min_delay": 0.0,    # No forced wait — fire LLM the INSTANT VAD detects silence
+                "max_delay": 0.6,    # Safety cap in case VAD misses end of utterance
             },
             interruption={
-                "mode": "adaptive",  # Clear audio buffer immediately on user barge-in
+                "enabled": True,
+                "mode": "adaptive",              # Clear TTS buffer immediately on barge-in
+                "min_duration": 0.05,            # 50ms of speech is enough to interrupt
+                "false_interruption_timeout": 0.5, # Resume agent if interruption < 500ms (noise)
+                "resume_false_interruption": True,
+            },
+            preemptive_generation={
+                "enabled": True,                 # LLM starts generating WHILE user is still talking
             },
         ),
     )

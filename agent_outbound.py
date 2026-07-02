@@ -75,11 +75,12 @@ from workspace_config_loader import load_workspace_config, WorkspaceAgentConfig
 
 logger.info("[OUTBOUND] Agent initialized")
 
-# Pre-load VAD model at startup so it's ready instantly when a call arrives
-# Setting min_silence_duration to 0.2s for faster interruption response
+# Pre-load VAD model at startup — tuned for telephony
 _VAD = silero.VAD.load(
-    min_silence_duration=0.2,
-    activation_threshold=0.3,   # Lower threshold = more sensitive to speech onset
+    min_silence_duration=0.15,    # 150ms silence before VAD declares end-of-speech
+    activation_threshold=0.25,    # Lower = starts transcribing sooner on soft speech
+    min_speech_duration=0.05,     # 50ms minimum to count as speech (filters DTMF/pops)
+    sample_rate=16000,             # Match Deepgram's ingestion rate — no resampling overhead
 )
 
 
@@ -87,7 +88,7 @@ _VAD = silero.VAD.load(
 # HELPERS
 # =============================================================================
 
-def _build_tts(ws_config: WorkspaceAgentConfig, provider_override: str = None, voice_override: str = None, language_override: str = None):
+def _build_tts(ws_config: WorkspaceAgentConfig, provider_override: str = None, voice_override: str = None, language_override: str = None, speed: float = 1.0):
     provider = (provider_override or os.getenv("TTS_PROVIDER", ws_config.tts_provider)).lower()
 
     # Route to Sarvam if the voice override is a known Sarvam speaker (bulbul:v3 compatible list)
@@ -110,6 +111,7 @@ def _build_tts(ws_config: WorkspaceAgentConfig, provider_override: str = None, v
         voice    = voice_override or ws_config.tts_voice or os.getenv("SARVAM_VOICE", "ishita")
         language = language_override or ws_config.tts_language or os.getenv("SARVAM_LANGUAGE", "en-IN")
         logger.info(f"[TTS] Sarvam -- model={model}, speaker={voice}, lang={language}")
+        # Note: Sarvam bulbul:v3 speech speed is controlled via the dashboard Speech Speed slider
         return sarvam.TTS(model=model, speaker=voice, target_language_code=language)
     if provider == "deepgram":
         # Deepgram uses model names for voices (e.g. aura-asteria-en)
@@ -118,10 +120,11 @@ def _build_tts(ws_config: WorkspaceAgentConfig, provider_override: str = None, v
         return deepgram.TTS(model=voice)
     if provider == "openai" or os.getenv("OPENAI_API_KEY"):
         voice = voice_override or os.getenv("OPENAI_TTS_VOICE", ws_config.tts_voice)
-        logger.info(f"[TTS] OpenAI -- voice={voice}")
+        logger.info(f"[TTS] OpenAI -- voice={voice}, speed={speed}")
         return openai.TTS(
             model=os.getenv("OPENAI_TTS_MODEL", "tts-1"),
             voice=voice,
+            speed=speed,
         )
     
     # Fallback to Deepgram
@@ -353,7 +356,7 @@ class OutboundTools(llm.ToolContext):
 # =============================================================================
 
 class OutboundAssistant(Agent):
-    def __init__(self, ws_config: WorkspaceAgentConfig, tools: list, user_prompt: str = None, tts_language: str = None, is_campaign: bool = False):
+    def __init__(self, ws_config: WorkspaceAgentConfig, tools: list, user_prompt: str = None, tts_language: str = None, is_campaign: bool = False, call_connected_event: asyncio.Event = None):
         
         logger.info(f"[OUTBOUND-DEBUG] OutboundAssistant init. is_campaign={is_campaign}")
         logger.info(f"[OUTBOUND-DEBUG] user_prompt: {repr(user_prompt)}")
@@ -409,6 +412,20 @@ class OutboundAssistant(Agent):
         )
             
         super().__init__(instructions=instructions, tools=tools)
+        self._initial_greeting = ws_config.initial_greeting
+        self._call_connected_event = call_connected_event
+
+    async def on_enter(self) -> None:
+        """Wait for SIP answer in a background task, then greet to keep scheduler active."""
+        async def _greet_when_ready():
+            if self._call_connected_event:
+                logger.info("[OUTBOUND] on_enter — waiting for SIP answer before greeting...")
+                await self._call_connected_event.wait()
+            
+            logger.info("[OUTBOUND] on_enter — dispatching greeting via turn loop.")
+            await self.session.say(self._initial_greeting, allow_interruptions=True)
+            
+        asyncio.create_task(_greet_when_ready())
 
 
 # =============================================================================
@@ -450,6 +467,34 @@ async def entrypoint(ctx: agents.JobContext):
 
     workspace_id = config_dict.get("business_id") or config_dict.get("workspace_id")
     ws_config = await load_workspace_config(workspace_id, mode="outbound")
+
+    # ── Apply live per-call overrides from UI metadata ──────────────────────────
+    # These fields are set by the dashboard (CallDispatcher / BulkDialer) on every
+    # call so the agent always reflects what the user last configured in the UI —
+    # no need to restart the agent or save to agent_config.json.
+    meta_system_prompt    = config_dict.get("system_prompt", "").strip()
+    meta_llm_model        = config_dict.get("llm_model", "").strip()
+    meta_llm_temperature  = config_dict.get("llm_temperature")
+    meta_initial_greeting = config_dict.get("initial_greeting", "").strip()
+    meta_fallback_greeting = config_dict.get("fallback_greeting", "").strip()
+
+    if meta_system_prompt:
+        ws_config.system_prompt = meta_system_prompt
+        logger.info(f"[OUTBOUND] Config override: system_prompt from metadata ({len(meta_system_prompt)} chars)")
+    if meta_llm_model:
+        ws_config.llm_model = meta_llm_model
+        logger.info(f"[OUTBOUND] Config override: llm_model={meta_llm_model!r}")
+    if meta_llm_temperature is not None:
+        try:
+            ws_config.llm_temperature = float(meta_llm_temperature)
+            logger.info(f"[OUTBOUND] Config override: llm_temperature={ws_config.llm_temperature}")
+        except (TypeError, ValueError):
+            pass
+    if meta_initial_greeting:
+        ws_config.initial_greeting = meta_initial_greeting
+        logger.info(f"[OUTBOUND] Config override: initial_greeting from metadata")
+    if meta_fallback_greeting:
+        ws_config.fallback_greeting = meta_fallback_greeting
 
     # --- Campaign / lead enrichment fields (set by BulkDialer and Workflow engine) ---
     lead_name       = config_dict.get("lead_name", "")
@@ -514,7 +559,8 @@ async def entrypoint(ctx: agents.JobContext):
         ws_config,
         config_dict.get("tts_provider"),
         config_dict.get("voice_id"),
-        config_dict.get("tts_language")
+        config_dict.get("tts_language"),
+        float(config_dict.get("tts_speed", 1.0))
     )
     built_llm = _build_llm(ws_config, config_dict.get("model_provider"))
 
@@ -523,31 +569,34 @@ async def entrypoint(ctx: agents.JobContext):
     # This prevents auto-detection delays and false-interruption bugs when switching languages.
     stt_lang = "hi" if is_auto or "en" in ws_config.stt_language else ws_config.stt_language
 
-    # Resolve STT model
-    stt_model = ws_config.stt_model
+    # Resolve STT model — prefer nova-3 (faster streaming, lower latency than nova-2)
+    stt_model = ws_config.stt_model if ws_config.stt_model != "nova-2" else "nova-3"
 
     session = AgentSession(
-        vad=_VAD,  # reuse pre-loaded model — no disk I/O on call start
+        vad=_VAD,
         stt=deepgram.STT(
-            base_url="wss://api.deepgram.com/v1/listen",
             model=stt_model,
             language=stt_lang,
-            interim_results=True,
+            interim_results=True,   # Stream partial transcripts word-by-word as user speaks
             smart_format=True,
         ),
         llm=built_llm,
         tts=built_tts,
-        # ── Latency-optimized turn handling ──
-        # 400ms min_delay = agent responds quickly after user pauses
-        # Adaptive interruption = clears TTS buffer when user speaks over the bot
         turn_handling=TurnHandlingOptions(
-            turn_detection="server_vad",
+            turn_detection="vad",
             endpointing={
-                "min_delay": 400,    # 400ms silence → assume user is done (telephony sweet spot)
-                "max_delay": 1500,   # Safety cap — force turn closure after 1.5s
+                "min_delay": 0.0,    # No forced wait — fire LLM the INSTANT VAD detects silence
+                "max_delay": 0.6,    # Safety cap in case VAD misses end of utterance
             },
             interruption={
-                "mode": "adaptive",  # Clear audio buffer immediately on user barge-in
+                "enabled": True,
+                "mode": "adaptive",              # Clear TTS buffer immediately on barge-in
+                "min_duration": 0.05,            # 50ms of speech is enough to interrupt
+                "false_interruption_timeout": 0.5, # Resume agent if interruption < 500ms (noise)
+                "resume_false_interruption": True,
+            },
+            preemptive_generation={
+                "enabled": True,                 # LLM starts generating WHILE user is still talking
             },
         ),
     )
@@ -555,13 +604,39 @@ async def entrypoint(ctx: agents.JobContext):
     # Link session to tools for dynamic language switching
     fnc_ctx.agent_session = session
 
+    call_connected_event = asyncio.Event()
+
     agent_instance = OutboundAssistant(
         ws_config=ws_config,
         tools=list(fnc_ctx.function_tools.values()),
         user_prompt=user_prompt,
         tts_language=config_dict.get("tts_language"),
-        is_campaign=is_campaign_call
+        is_campaign=is_campaign_call,
+        call_connected_event=call_connected_event
     )
+
+    # ── Analytics: write campaign result when call ends so Live Results table populates ──
+    @ctx.room.on("disconnected")
+    def on_disconnected(*args, **kwargs):
+        logger.info("[OUTBOUND] Call disconnected. Running analytics...")
+        import analytics
+        msgs = (
+            agent_instance.chat_ctx.messages()
+            if callable(getattr(agent_instance.chat_ctx, "messages", None))
+            else getattr(agent_instance.chat_ctx, "messages", [])
+        )
+        asyncio.create_task(
+            analytics.analyze_and_save_call(
+                phone_number=phone_number or "unknown",
+                direction="outbound",
+                chat_messages=msgs,
+                campaign_id=campaign_id,
+                lead_row_index=lead_row_index,
+                lead_email=lead_email,
+                workflow_run_id=workflow_run_id,
+                room_name=ctx.room.name,
+            )
+        )
     
     # Capitalize the voice ID so it displays nicely (e.g. "Ishita" instead of "ishita")
     raw_voice_id = config_dict.get("voice_id", "")
@@ -625,23 +700,50 @@ async def entrypoint(ctx: agents.JobContext):
                     wait_until_answered=True,
                 )
             )
-            logger.info("[OUTBOUND] Call answered. Speaking greeting...")
+            logger.info("[OUTBOUND] Call answered. Triggering greeting...")
             # Give the WebRTC stream a brief moment to stabilise after SIP answer
             await asyncio.sleep(1.5)
-            await session.say(ws_config.initial_greeting, allow_interruptions=True)
+            call_connected_event.set()
         except Exception as e:
             logger.error(f"[OUTBOUND] Dial failed: {e}")
             import traceback; logger.error(traceback.format_exc())
             ctx.shutdown()
     else:
-        logger.info("[OUTBOUND] Speaking fallback greeting instantly...")
-        try:
-            await session.say(ws_config.initial_greeting, allow_interruptions=True)
-        except Exception as e:
-            logger.error(f"[OUTBOUND] Fallback greeting failed: {e}")
-            import traceback; logger.error(traceback.format_exc())
+        logger.info("[OUTBOUND] No dial needed (SIP already present or fallback). Triggering greeting instantly...")
+        call_connected_event.set()
 
+    # ── Real-time transcript logging ─────────────────────────────────────────
+    # These session events fire AFTER each turn completes so we always get
+    # the final, committed text (not interim STT results).
+    @session.on("user_input_transcribed")
+    def _on_user_transcript(event):
+        text = getattr(event, 'transcript', None) or getattr(event, 'text', None) or str(event)
+        is_final = getattr(event, 'is_final', True)
+        if is_final and text:
+            logger.info(f"[TRANSCRIPT] ▶ USER : {text.strip()}")
 
+    @session.on("agent_state_changed")
+    def _on_agent_state(event):
+        state = getattr(event, 'new_state', None) or getattr(event, 'state', str(event))
+        logger.info(f"[OUTBOUND] Agent state → {state}")
+
+    @session.on("conversation_item_added")
+    def _on_conv_item(event):
+        item = getattr(event, 'item', None)
+        if item is None:
+            return
+        role = getattr(item, 'role', None)
+        content = getattr(item, 'content', None) or getattr(item, 'text_content', None)
+        if not content:
+            return
+        text = content if isinstance(content, str) else (
+            ' '.join(c.text if hasattr(c, 'text') else str(c) for c in content)
+            if hasattr(content, '__iter__') else str(content)
+        )
+        if role == 'user':
+            logger.info(f"[TRANSCRIPT] ▶ USER : {text.strip()}")
+        elif role in ('assistant', 'agent'):
+            logger.info(f"[TRANSCRIPT] ◀ AGENT: {text.strip()}")
 
 if __name__ == "__main__":
     agents.cli.run_app(

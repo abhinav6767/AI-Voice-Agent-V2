@@ -67,6 +67,9 @@ async function buildNodeOutput(
 
     switch (node.type) {
       case "manual_trigger":
+        output = { timestamp: new Date().toISOString(), triggerType: "manual" };
+        break;
+
       case "new_lead":
       case "form_submitted":
         output = { ...input };
@@ -550,8 +553,8 @@ function BuilderContent() {
       nodes.forEach((n) => {
         exec1.nodeExecutions[n.id] = {
           nodeId: n.id, nodeLabel: n.label, type: n.type, status: "success",
-          input: { lead: DEMO_LEAD },
-          output: { success: true, timestamp: new Date(Date.now() - 1000 * 60 * 12 + 1500).toISOString() },
+          input: n.type === "manual_trigger" ? {} : { lead: DEMO_LEAD },
+          output: n.type === "manual_trigger" ? { timestamp: new Date().toISOString() } : { success: true, timestamp: new Date(Date.now() - 1000 * 60 * 12 + 1500).toISOString() },
           startedAt: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
           finishedAt: new Date(Date.now() - 1000 * 60 * 12 + 200).toISOString(),
           executionMs: Math.floor(Math.random() * 300) + 50,

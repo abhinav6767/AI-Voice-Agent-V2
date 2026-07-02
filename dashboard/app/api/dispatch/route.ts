@@ -60,6 +60,14 @@ export async function POST(request: Request) {
         const greeting             = body.greeting || "";
         const agentName            = body.agentName || "";
 
+        // ── Dynamic per-call agent config (set from UI on every call) ─────────
+        // These override the static data/agent_config.json on the Python side.
+        const systemPrompt    = body.systemPrompt    || "";   // full system prompt from UI
+        const llmModel        = body.llmModel        || "";   // e.g. "llama-3.3-70b-versatile"
+        const llmTemperature  = body.llmTemperature  ?? null; // e.g. 0.7
+        const initialGreeting = body.initialGreeting || greeting; // primary greeting field
+        const fallbackGreeting = body.fallbackGreeting || "";
+
         if (!phoneNumber) {
             return NextResponse.json({ error: "Phone number is required" }, { status: 400 });
         }
@@ -93,6 +101,7 @@ export async function POST(request: Request) {
             voice_id:         voice || "alloy",
             tts_provider:     body.ttsProvider,
             tts_language:     body.ttsLanguage,
+            tts_speed:        body.ttsSpeed,
             workspace_id:     workspaceId,
             triggered_by:     user.email,
             // Campaign / lead enrichment (populated by BulkDialer & Workflow engine)
@@ -104,8 +113,15 @@ export async function POST(request: Request) {
             lead_row_index:   leadRowIndex,
             workflow_run_id:  workflowRunId,
             override_system_prompt: overrideSystemPrompt,
-            initial_greeting: greeting,
+            initial_greeting: initialGreeting,
             agent_name:       agentName,
+            // ── Dynamic per-call agent config from UI ──────────────────────────
+            // Python agents read these and override ws_config fields directly,
+            // bypassing the static data/agent_config.json file entirely.
+            system_prompt:     systemPrompt,
+            llm_model:         llmModel,
+            llm_temperature:   llmTemperature,
+            fallback_greeting: fallbackGreeting,
         });
 
         console.log(`[DISPATCH] Step 1: Creating room ${roomName}`);

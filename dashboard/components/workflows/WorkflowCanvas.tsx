@@ -33,12 +33,12 @@ function getSourcePortPosition(
   const baseX = node.position.x + NODE_WIDTH / 2; // Center horizontally
   const baseY = node.position.y + NODE_HEIGHT + PORT_RADIUS - 5; // Bottom edge of node, accounting for negative margins
 
-  if (node.category === "condition") {
-    if (port === "yes") {
-      return { x: baseX - 24, y: baseY }; // Left port — matches gap-12 (48px total / 2)
+  if (node.category === "condition" || node.type === "loop_items") {
+    if (port === "yes" || port === "loop") {
+      return { x: baseX - 42, y: baseY }; // Left port (gap-16 is 64px. 32px + half text width ~42px)
     }
-    if (port === "no") {
-      return { x: baseX + 24, y: baseY }; // Right port — matches gap-12
+    if (port === "no" || port === "done") {
+      return { x: baseX + 42, y: baseY }; // Right port
     }
   }
   return { x: baseX, y: baseY };
@@ -83,6 +83,8 @@ const EdgePath = React.memo(function EdgePath({
   let strokeColor = "#4b5563";
   if (edge.label === "Yes" || edge.sourcePort === "yes") strokeColor = "#3fb950";
   if (edge.label === "No" || edge.sourcePort === "no") strokeColor = "#f85149";
+  if (edge.label === "Loop" || edge.sourcePort === "loop") strokeColor = "#a855f7";
+  if (edge.label === "Done" || edge.sourcePort === "done") strokeColor = "#9ca3af";
 
   const midX = (start.x + end.x) / 2;
   const midY = (start.y + end.y) / 2;
@@ -416,7 +418,7 @@ export default function WorkflowCanvas({
 
         const sourcePos = getSourcePortPosition(
           node,
-          port === "yes" ? "yes" : port === "no" ? "no" : undefined
+          ["yes", "no", "loop", "done"].includes(port) ? port : undefined
         );
 
         setConnectionStart({

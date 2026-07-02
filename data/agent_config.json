@@ -1,86 +1,68 @@
 {
-    "outbound":  {
-                     "agent_name":  "",
-                     "gender":  "female",
-                     "call_description":  "",
-                     "system_prompt":  "",
-                     "initial_greeting":  "",
-                     "fallback_greeting":  "",
-                     "stt_provider":  "deepgram",
-                     "stt_model":  "nova-2",
-                     "stt_language":  "auto",
-                     "tts_provider":  "sarvam",
-                     "tts_voice":  "ishita",
-                     "tts_language":  "hi-IN",
-                     "llm_provider":  "google",
-                     "llm_model":  "gemini-2.5-flash",
-                     "llm_temperature":  0.65,
-                     "transfer_number":  "+91 9999424997",
-                     "automatic_handoff":  true,
-                     "handoff_conditions":  "please connect me to human agent ",
-                     "resources":  [
-                                       {
-                                           "type":  "file",
-                                           "name":  "spinny.csv",
-                                           "value":  "ListingCarImage__productImage src,ListingBrandModelDetail__makeModelLink href,ListingBrandModelDetail__make,ListingBrandModelDetail__priceWithRupeeSymbol,ListingPricingDetail__variant,ListingPricingDetail__emi,CarListingCardDetail__more,CarListingCardDetail__more 2,CarListingCardDetail__more 3,CarListingCardDetail__more 4,HubDetails__hubAddress,HighlightsPLP__title,CardFooter__liteStatement,HighlightsPLP__more\r\nhttps://mda.spinny.com/sp-file-system/public/2026-05-30/940a09371e0b4038bb34935e19f09420/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/noida/volkswagen/polo/trendline-12l-p-sector-4-2014/29054099/,2014 Volkswagen Polo,2.75 Lakh,Trendline 1.2L (P),\"EMI 7,050/m\",103K km,petrol,manual,DL3C,\"Sector 4, Greater Noida\",City\u0027s most affordable,,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-01/5cd2e118ab5041d9af72365eaa0f2d0c/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/faridabad/mahindra/xuv-300/w8-o-15-diesel-sector-27-2023/29495188/,2023 Mahindra XUV 300,9.69 Lakh,W8 (O) 1.5 Diesel,\"EMI 16,569/m\",34.5K km,diesel,manual,HR26,\"Sector 27, Faridabad\",,\"High quality, less driven\",\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-01/5b648fe8f240413399ca7e93bef9c272/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/faridabad/hyundai/grand-i10-nios/sportz-12-kappa-vtvt-cng-sector-27-2022/29473723/,2022 Hyundai Grand i10 Nios,5.70 Lakh,Sportz 1.2 Kappa VTVT CNG,\"EMI 9,774/m\",35.5K km,cng,manual,HR98,\"Sector 27, Faridabad\",New battery,,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/2ae3f89c6cc44e3fa6ba07cfc41686ee/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/noida/ford/figo/trend-12-tivct-2016/28594250/,2016 Ford Figo,2.71 Lakh,Trend 1.2 Ti-VCT,\"EMI 10,611/m\",91K km,petrol,manual,DL1C,\"Sector 4, Greater Noida\",,Highly affordable \u0026 reliable,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/afec9f5cd6014bcebf056f8c44a62853/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/gurgaon/renault/kiger/rxz-turbo-cvt-2022/29448242/,2022 Renault Kiger,6.55 Lakh,RXZ Turbo CVT,\"EMI 11,273/m\",50K km,petrol,automatic,HR87,\"Sohna Road, Gurgaon\",New battery,,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/7004de3b4dfa4e11894e6770cf3df5a6/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/ghaziabad/maruti-suzuki/baleno/delta-12-at-2018/29374087/,2018 Maruti Baleno,4.46 Lakh,Delta 1.2 AT,\"EMI 7,663/m\",43K km,petrol,automatic,DL2C,\"Raj Nagar Extension, Ghaziabad\",,\"High quality, less driven\",\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/f3d1ac9e014f4ccfb10f17be838ef2df/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/ghaziabad/maruti-suzuki/alto-k10/vxi-o-2024/29639908/,2024 Maruti Alto K10,4.13 Lakh,VXi (O),\"EMI 7,101/m\",14K km,petrol,manual,DL4C,\"Raj Nagar Extension, Ghaziabad\",,\"Latest cars, 3 year warranty\",\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/2ec596f413084a31be13a8e1db911016/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/ghaziabad/maruti-suzuki/swift/vxi-2023/29102407/,2023 Maruti Swift,5.22 Lakh,VXi,\"EMI 8,957/m\",24.5K km,petrol,manual,UP14,\"Kaushambi, Ghaziabad\",Performance,,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/50d7fc4ea97644679bc4c87c9df1ea3e/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/ghaziabad/nissan/magnite/xe-2023/29403332/,2023 Nissan Magnite,4.77 Lakh,XE,\"EMI 8,191/m\",12K km,petrol,manual,DL3C,\"Raj Nagar Extension, Ghaziabad\",City\u0027s least driven,,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/2ab6b0a9b4f14b00b85fbc77cffd8d85/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/ghaziabad/tata/tiago/xt-2021/28748252/,2021 Tata Tiago,4.24 Lakh,XT,\"EMI 7,356/m\",34.5K km,petrol,manual,UP15,\"Kaushambi, Ghaziabad\",4-star NCAP rating,,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/de02b9c2af7e47ebbfc6e6955752463d/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/delhi/tata/tiago/revotron-xt-2017/28527412/,2017 Tata Tiago,2.98 Lakh,Revotron XT,\"EMI 5,211/m\",46.5K km,petrol,manual,DL10,\"Rajouri Garden, Delhi\",,Highly affordable \u0026 reliable,\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/f87114092a6749e5a505e6fa3296554f/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/faridabad/renault/kiger/rxt-o-turbo-mt-2023/29383410/,2023 Renault Kiger,5.38 Lakh,RXT (O) Turbo MT,\"EMI 9,229/m\",71.5K km,petrol,manual,HR29,\"Sector 27, Faridabad\",4-star NCAP rating,,\u0026 1 more reason to buy\r\nhttps://mda.spinny.com/sp-file-system/public/2026-06-02/8f52e8b49d164431b588e96bd02da970/raw/file.JPG?q=85\u0026w=350,https://www.spinny.com/buy-used-cars/gurgaon/maruti-suzuki/wagon-r-10/vxi-10-2019/28373924/,2019 Maruti Wagon R 1.0,3.86 Lakh,VXi 1.0,\"EMI 6,970/m\",17.5K km,petrol,manual,HR30,\"Sohna Road, Gurgaon\",New battery,,\r\n,https://www.spinny.com/buy-used-cars/gurgaon/kia/carens/luxury-plus-15-turbo-petrol-imt-7-str-2023/28787121/,2023 Kia Carens,14.50 Lakh,Luxury Plus 1.5 Turbo Petrol iMT 7 STR,\"EMI 25,081/m\",16.5K km,petrol,manual,HR98,\"Sector 29, Gurgaon\",City\u0027s least driven,,\u0026 1 more reason to buy\r\n,https://www.spinny.com/buy-used-cars/gurgaon/bmw/5-series/530li-m-sport-titanium-bronze-sector-29-2026/27322562/,2026 BMW 5 Series,69.99 Lakh,530Li M Sport (Titanium Bronze),\"EMI 1,20,373/m\",16K km,petrol,automatic,Unregistered,\"Sector 29, Gurgaon\",Titanium Bronze,,\u0026 3 more reasons to buy\r\n,https://www.spinny.com/buy-used-cars/gurgaon/toyota/urban-cruiser-hyryder/g-hybrid-dual-tone-2024/28446504/,2024 Toyota Urban Cruiser Hyryder,14.50 Lakh,G Hybrid Dual Tone,\"EMI 24,997/m\",58K km,hybrid,automatic,HR26,\"Sohna Road, Gurgaon\",Award winner,,\r\n,https://www.spinny.com/buy-used-cars/delhi/maruti-suzuki/grand-vitara/alpha-plus-intelligent-hybrid-ecvt-2023/29241639/,2023 Maruti Grand Vitara,15.10 Lakh,Alpha Plus Intelligent Hybrid eCVT,\"EMI 26,036/m\",50K km,hybrid,automatic,DL7C,\"Rohini, Delhi\",Award winner,,\r\n,https://www.spinny.com/buy-used-cars/gurgaon/audi/q3/40-tfsi-premium-plus-sector-29-2023/28885782/,2023 Audi Q3,33.90 Lakh,40 TFSI Premium Plus,\"EMI 58,299/m\",37.5K km,petrol,automatic,DL3C,\"Sector 29, Gurgaon\",,\"High quality, luxury cars\",\r\n,https://www.spinny.com/buy-used-cars/gurgaon/mercedes-benz/e-class/e-200-avantgarde-sector-29-2017/28720409/,2017 Mercedes E-Class,25.50 Lakh,E 200 Avantgarde,\"EMI 43,847/m\",61.5K km,petrol,automatic,DL10,\"Sector 29, Gurgaon\",Pre-Safe system,,\u0026 2 more reasons to buy\r\n,https://www.spinny.com/buy-used-cars/gurgaon/jeep/compass/sport-14-petrol-sector-29-2019/28875194/,2019 Jeep Compass,7 Lakh,Sport 1.4 Petrol,\"EMI 11,920/m\",99.5K km,petrol,manual,HR26,\"Sector 29, Gurgaon\",,Luxury cars with limited benefits,\r\n",
-                                           "path":  "E:\\EXTRAS\\Antigravity\\AI-Agents\\Ai-Voice-Calling-Agent-2.0\\data\\resources\\outbound\\spinny.csv"
-                                       }
-                                   ],
-                     "custom_functions":  [
-                                              {
-                                                  "name":  "lookup_user",
-                                                  "description":  "Look up user details by phone number.",
-                                                  "enabled":  true
-                                              },
-                                              {
-                                                  "name":  "transfer_call",
-                                                  "description":  "Transfer the call to a human support agent or another number.",
-                                                  "enabled":  true
-                                              }
-                                          ]
-                 },
-    "inbound":  {
-                    "agent_name":  "Aayushi",
-                    "gender":  "female",
-                    "call_description":  "Inbound receptionist for Shri Krishna Dental Clinic, South Delhi — appointment booking, treatment enquiries, pricing, doctor availability, and Google Calendar confirmation.",
-                    "system_prompt":  "# ROLE \u0026 PERSONA\nYou are Aayushi, the AI receptionist for Shri Krishna Dental Clinic, located in Greater Kailash Part 1 (GK1), South Delhi. You are warm, polite, and knowledgeable — like a real clinic receptionist who genuinely cares about the patient\u0027s comfort. You naturally blend Hindi and English (Hinglish) in the way Delhi people speak. You never sound like a bot reading from a script.\n\nIf a caller directly asks whether you are an AI or a bot, answer honestly in one sentence: \u0027Haan, main ek AI assistant hoon — par aapki har baat sunna aur madad karna mera kaam hai.\u0027 Then continue naturally.\n\n# HOW YOU SPEAK\n- 1 to 2 short sentences per turn. Never monologue.\n- Use natural Hinglish: \u0027Bilkul\u0027 for sure, \u0027Theek hai\u0027 for okay, \u0027Koi baat nahi\u0027 for no problem, \u0027Ek second\u0027 for one moment — but never sound forced.\n- Never use bullet points, numbered lists, or markdown headers — you are speaking on a phone call.\n- Use natural fillers: \u0027Haan ji\u0027, \u0027Bilkul\u0027, \u0027Sure\u0027, \u0027Got it\u0027 — but vary them, never repeat the same one.\n- Spell out all numbers in words: say \u0027teen sau rupaye\u0027 not 300, \u0027subah das baje\u0027 not 10 AM.\n- If the caller switches to pure Hindi, call change_spoken_language with hi-IN before responding. If they switch back to English, call it with en-IN. Only call this when the language actually changes — never call it twice in a row for the same language.\n\n# CONVERSATION STATE MACHINE\n\n## STATE 1 — INTENT DETECTION\nAfter the greeting, ask: \u0027Kya aap appointment book karna chahte hain, ya koi treatment ke baare mein poochna chahte hain?\u0027\nDetect one of: BOOK_APPOINTMENT, ENQUIRY, PRICING, DOCTOR_QUERY, EMERGENCY.\n\n## STATE 2 — PATIENT CAPTURE (CRITICAL — DO THIS IMMEDIATELY)\nAsk for name and phone number naturally within the first 2 turns. The moment the caller gives you EITHER their name OR their phone number, ask for whichever is missing. The INSTANT you have BOTH name AND phone — call save_lead_info immediately. Do NOT wait for city. Do NOT wait for the appointment details. City will default to Delhi automatically. If you have a name and phone and have NOT yet called save_lead_info, call it NOW before doing anything else.\n\n## STATE 3A — APPOINTMENT BOOKING\nAsk: which treatment, preferred date (weekday Mon-Sat only), preferred time (morning 9 AM to 1 PM or evening 5 PM to 8 PM — clinic CLOSED on Sundays).\nConfirm details back clearly once: \u0027Toh main book karti hoon — [treatment] ke liye [date] ko [time] baje. Sahi hai?\u0027\nOn patient confirmation, IMMEDIATELY call query_workspace_integration. Use EXACTLY this format:\n  action_name: \u0027book_appointment\u0027\n  parameters_json: \u0027{\"patient_name\": \"[name]\", \"date\": \"[YYYY-MM-DD]\", \"time\": \"[HH:MM]\", \"treatment\": \"[treatment]\", \"phone\": \"[phone]\", \"duration_minutes\": [30 or 45 or 60]}\u0027\nIMPORTANT: date must be in YYYY-MM-DD format. time must be in 24-hour HH:MM format (e.g., 10:00 for 10 AM, 17:30 for 5:30 PM). duration_minutes must be a number, not a string.\nAfter the tool confirms: \u0027Perfect! Aapka appointment confirm ho gaya. Aapko calendar invite mil jayega. Kuch aur chahiye?\u0027\nIf the tool says doctor is busy: tell the patient exactly what the tool said — share the suggested alternative time and ask if they\u0027d like to book that slot instead.\n\n## STATE 3B — TREATMENT ENQUIRY\nAnswer directly from knowledge base. Give exact price range. Then offer: \u0027Kya main abhi appointment book kar doon?\u0027\n\n## STATE 3C — DOCTOR QUERY\nDr. Rajiv Mehta — 15 saal experience, oral surgery, implants, RCT. Morning only (9 AM-1 PM) Mon-Sat.\nDr. Priya Sharma — cosmetic dentistry, braces, teeth whitening. Available both sessions.\nDr. Ananya Gupta — general dentistry, cleanings, checkups. Evening only (5 PM-8 PM).\n\n## STATE 3D — EMERGENCY\nIf caller mentions severe tooth pain, broken tooth, severe swelling, or heavy bleeding — say: \u0027Yeh urgent lagta hai. Aaj ke liye emergency slot available hai. Abhi book karein?\u0027\nBook immediately using query_workspace_integration or transfer to the clinic\u0027s live line if they prefer.\n\n## STATE 4 — CLOSING\nBefore ending: confirm appointment summary once. Say: \u0027Appointment ke din thodi der pehle aa jayiyega. Aur koi sawaal?\u0027\nIf no questions: \u0027Bahut shukriya! Aapka din achha ho. Bye!\u0027\n\n# ABSOLUTE RULES — NEVER BREAK\n1. NEVER invent a price not in the knowledge base. If unsure: \u0027Exact cost doctor se milne ke baad pata chalega.\u0027\n2. NEVER book outside clinic hours. Mon-Sat only. Morning 9 to 1, Evening 5 to 8. SUNDAYS CLINIC IS CLOSED.\n3. NEVER say \u0027appointment booked\u0027 without actually calling query_workspace_integration — the calendar must be updated.\n4. ALWAYS call transfer_to_sales if caller asks for a human, is frustrated, or has a medical emergency you cannot handle.\n5. NEVER end the call without either a confirmed appointment OR the patient\u0027s name and phone saved via save_lead_info for follow-up.\n6. ALWAYS call save_lead_info the moment you have name + phone — before moving to any other step.\n\n# HUMAN TRANSFER RULE — HIGHEST PRIORITY\nThe moment a caller says \u0027kisi se baat karni hai\u0027, \u0027doctor se directly milna hai\u0027, \u0027human se connect karo\u0027, \u0027I want to talk to a real person\u0027, \u0027receptionist se baat karni hai\u0027 — in ANY language, ANY tone — IMMEDIATELY call transfer_to_sales. Do NOT ask questions first. Do NOT offer alternatives first. Just say \u0027Bilkul, ek second — main abhi connect karti hoon.\u0027 and call the tool.\n\n# OBJECTION HANDLING\n- \u0027Bahut mehnga hai\u0027: \u0027Samajh sakti hoon. Hamare paas EMI option bhi hai Rs. 10,000 se zyada ke treatments pe. Consultation mein discuss kar sakte hain.\u0027\n- \u0027Doctor ka experience?\u0027: \u0027Dr. Mehta ke paas 15 saal ka experience hai. Dr. Priya cosmetic dentistry specialist hain.\u0027\n- \u0027Guarantee hai?\u0027: \u0027Hamare saare procedures international standards ke hain. Rs. 3,000 se zyada ke treatments pe 30 din ka free follow-up milta hai.\u0027\n- \u0027Abhi busy hoon\u0027: \u0027Koi baat nahi. Aapka naam aur number note kar leti hoon. Hum convenient time pe call back karenge.\u0027 Then call save_lead_info.",
-                    "initial_greeting":  "Namaste! Aap Shri Krishna Dental Clinic mein call kiya hai. Main Aayushi hoon. Aap ki kaise seva kar sakti hoon?",
-                    "fallback_greeting":  "Hello! Thank you for calling Shri Krishna Dental Clinic. This is Aayushi. How may I help you today?",
-                    "stt_provider":  "deepgram",
-                    "stt_model":  "nova-3",
-                    "stt_language":  "auto",
-                    "tts_provider":  "sarvam",
-                    "tts_voice":  "ishita",
-                    "tts_language":  "hi-IN",
-                    "llm_provider":  "google",
-                    "llm_model":  "gemini-2.5-flash",
-                    "llm_temperature":  0.3,
-                    "transfer_number":  "+91 9999424997",
-                    "automatic_handoff":  true,
-                    "handoff_conditions":  "connect me to human, doctor se baat karni hai, I want a real person, transfer me",
-                    "resources":  [
-                                      {
-                                          "type":  "text",
-                                          "name":  "clinic_knowledge_base",
-                                          "value":  "CLINIC: Shri Krishna Dental Clinic\nADDRESS: M-14, Greater Kailash Part 1 (GK1), New Delhi - 110048. Near M-Block Market.\nPHONE: +91 98105 34567\nHOURS: Monday to Saturday — Morning 9:00 AM to 1:00 PM, Evening 5:00 PM to 8:00 PM. SUNDAY: CLOSED.\nPARKING: Free parking available in M-Block Market.\n\nDOCTORS:\nDr. Rajiv Mehta (BDS, MDS Oral Surgery) — 15 years experience. Specialises in extractions, implants, root canal treatments. Available Mon-Sat mornings only (9 AM - 1 PM).\nDr. Priya Sharma (BDS, MDS Cosmetic \u0026 Orthodontics) — 10 years experience. Braces, teeth whitening, veneers, smile makeovers. Available Mon-Sat both morning and evening.\nDr. Ananya Gupta (BDS General Dentistry) — 5 years experience. Routine checkups, cleanings, fillings. Available Mon-Sat evenings only (5 PM - 8 PM).\n\nTREATMENTS \u0026 PRICING (always give exact figures from this list):\nDental Consultation / Checkup: Rs. 300 (30 min)\nTeeth Cleaning (Scaling \u0026 Polishing): Rs. 800 to Rs. 1,200 (45 min)\nFluoride Treatment: Rs. 500 (20 min)\nTooth Filling Composite White: Rs. 1,000 to Rs. 2,000 per tooth (30 to 45 min)\nTooth Filling Silver Amalgam: Rs. 600 to Rs. 1,000 per tooth (30 min)\nRoot Canal Treatment Single Canal: Rs. 4,000 to Rs. 6,000 (60 to 90 min, may need 2 sittings)\nRoot Canal Treatment Multi Canal Molar: Rs. 6,000 to Rs. 9,000\nDental Crown Ceramic: Rs. 7,000 to Rs. 12,000 per tooth\nDental Crown Metal Ceramic PFM: Rs. 4,000 to Rs. 7,000 per tooth\nTooth Extraction Simple: Rs. 500 to Rs. 1,500\nTooth Extraction Surgical Wisdom Tooth: Rs. 2,500 to Rs. 5,000\nDental Implant Complete implant plus crown: Rs. 25,000 to Rs. 45,000 per tooth\nBraces Metal: Rs. 18,000 to Rs. 25,000 full treatment\nBraces Ceramic Clear: Rs. 28,000 to Rs. 40,000 full treatment\nClear Aligners Invisalign style: Rs. 50,000 to Rs. 1,20,000 full treatment\nTeeth Whitening In-clinic laser: Rs. 6,000 to Rs. 10,000 per session\nDental Veneers Porcelain: Rs. 10,000 to Rs. 18,000 per tooth\nSmile Makeover Package: Rs. 50,000 to Rs. 2,00,000 customised\nMouth Guard Night Guard Sports: Rs. 2,000 to Rs. 4,000\nDentures Complete: Rs. 15,000 to Rs. 35,000\nDentures Partial: Rs. 8,000 to Rs. 20,000\nPediatric Dentistry Child Checkup: Rs. 200 to Rs. 500\nPit and Fissure Sealants children: Rs. 400 to Rs. 700 per tooth\n\nPAYMENT \u0026 INSURANCE:\nAccepted: Cash, all UPI apps (GPay, PhonePe, Paytm), Credit and Debit Cards, Net Banking.\nEMI available on treatments above Rs. 10,000 via HDFC, ICICI, Bajaj Finserv credit cards.\nInsurance: Empanelled with Star Health, Niva Bupa, CGHS, ECHS. Bring your insurance card.\n\nPOLICIES:\nAdvance booking required for implants, RCT, and orthodontic consultations.\nFor cancellations please inform at least 2 hours prior.\nEmergency slots available daily — caller must mention it is urgent.\nFirst-time patients: bring any previous X-rays or dental records.\n30-day free follow-up included with all procedures above Rs. 3,000."
-                                      }
-                                  ],
-                    "custom_functions":  [
-                                             {
-                                                 "name":  "save_lead_info",
-                                                 "description":  "Save the patient\u0027s contact information (name, phone, city) after collection.",
-                                                 "enabled":  true
-                                             },
-                                             {
-                                                 "name":  "transfer_to_sales",
-                                                 "description":  "Transfer the caller to the clinic\u0027s live receptionist or doctor.",
-                                                 "enabled":  true
-                                             },
-                                             {
-                                                 "name":  "query_workspace_integration",
-                                                 "description":  "Book Google Calendar appointments and check real-time availability during the call.",
-                                                 "enabled":  true
-                                             }
-                                         ]
-                }
+  "outbound": {
+    "agent_name": "",
+    "gender": "female",
+    "call_description": "",
+    "system_prompt": "",
+    "initial_greeting": "",
+    "fallback_greeting": "",
+    "stt_provider": "deepgram",
+    "stt_model": "nova-2",
+    "stt_language": "en",
+    "tts_provider": "sarvam",
+    "tts_voice": "ishita",
+    "tts_language": "hi-IN",
+    "llm_provider": "groq",
+    "llm_model": "llama-3.3-70b-versatile",
+    "llm_temperature": 0.7,
+    "transfer_number": "",
+    "automatic_handoff": false,
+    "handoff_conditions": "",
+    "resources": [],
+    "custom_functions": [
+      {
+        "name": "lookup_user",
+        "description": "Look up user details by phone number.",
+        "enabled": true
+      },
+      {
+        "name": "transfer_call",
+        "description": "Transfer the call to a human support agent or another number.",
+        "enabled": true
+      }
+    ]
+  },
+  "inbound": {
+    "agent_name": "Sana",
+    "gender": "female",
+    "call_description": "Manages sales for Rapid x team's app and software development services.",
+    "system_prompt": "You are Sana sales manager of Rapid x team we create app and software for our clients",
+    "initial_greeting": "Namaste, main Sana hun, Rapid x team ki sales manager, aapka swagat hai.",
+    "fallback_greeting": "",
+    "stt_provider": "deepgram",
+    "stt_model": "nova-2",
+    "stt_language": "en",
+    "tts_provider": "sarvam",
+    "tts_voice": "ishita",
+    "tts_language": "en-IN",
+    "llm_provider": "google",
+    "llm_model": "gemini-2.5-flash",
+    "llm_temperature": 0.7,
+    "transfer_number": "+919999424997",
+    "automatic_handoff": true,
+    "handoff_conditions": "connect me to human",
+    "resources": [],
+    "custom_functions": [
+      {
+        "name": "save_lead_info",
+        "description": "Save the caller's contact information (name, phone, city) after collection.",
+        "enabled": true
+      },
+      {
+        "name": "transfer_to_sales",
+        "description": "Transfer the caller to a live human sales representative.",
+        "enabled": true
+      }
+    ]
+  }
 }

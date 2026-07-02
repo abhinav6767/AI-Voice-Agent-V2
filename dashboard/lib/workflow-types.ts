@@ -53,7 +53,13 @@ export type ActionType =
   | "salesforce_update"
   | "airtable_row"
   | "notion_page"
-  | "send_instagram_dm";
+  | "send_instagram_dm"
+  | "read_csv_leads";
+
+export interface ReadCsvLeadsConfig {
+  filePath: string;
+  limit?: number;
+}
 
 export interface GmailConfig {
   to: string;
@@ -306,6 +312,7 @@ export type NodeConfig =
   | HubspotConfig
   | AirtableConfig
   | NotionConfig
+  | ReadCsvLeadsConfig
   | SwitchConfig
   | MergeConfig
   | LoopConfig
@@ -797,6 +804,17 @@ return items.map(item => ({
     color: "#000000",
     defaultConfig: { databaseId: "", operation: "create", properties: {} },
     paletteGroup: "Productivity",
+    badge: "New",
+  },
+  {
+    type: "read_csv_leads",
+    category: "action",
+    label: "Read CSV Leads",
+    description: "Reads leads from the local data/leads.csv file to use in loops",
+    icon: "FileText",
+    color: "#000000",
+    defaultConfig: { filePath: "../data/leads.csv", limit: 0 },
+    paletteGroup: "Data",
     badge: "New",
   },
   {

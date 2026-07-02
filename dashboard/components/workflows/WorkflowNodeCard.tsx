@@ -95,7 +95,7 @@ export default React.memo(function WorkflowNodeCard({
   const color = meta?.color || "#8b949e";
   const iconName = meta?.icon || "FileText";
   const Icon = ICON_MAP[iconName] || FileText;
-  const isCondition = node.category === "condition";
+  const isCondition = node.category === "condition" || node.type === "loop_items";
   const isTrigger = node.category === "trigger";
 
   const configSummary = getConfigSummary(node);
@@ -299,7 +299,30 @@ export default React.memo(function WorkflowNodeCard({
 
         {/* Output ports (BOTTOM side) */}
         <div className={`flex flex-row items-center justify-center -mt-[5px] relative z-30 ${isCondition ? "gap-16" : ""}`}>
-          {isCondition ? (
+          {node.type === "loop_items" ? (
+            <>
+              {/* LOOP port */}
+              <div className="flex flex-col items-center gap-1">
+                <div
+                  className="w-[14px] h-[14px] rounded-full border-2 bg-[#0d1117] hover:bg-purple-500/20 transition-colors cursor-crosshair"
+                  style={{ borderColor: "#a855f7" }}
+                  data-port-id={`${node.id}-loop`}
+                  data-port-type="output-loop"
+                />
+                <span className="text-[10px] text-purple-400 font-bold leading-none tracking-wide">LOOP</span>
+              </div>
+              {/* DONE port */}
+              <div className="flex flex-col items-center gap-1">
+                <div
+                  className="w-[14px] h-[14px] rounded-full border-2 bg-[#0d1117] hover:bg-gray-500/20 transition-colors cursor-crosshair"
+                  style={{ borderColor: "#9ca3af" }}
+                  data-port-id={`${node.id}-done`}
+                  data-port-type="output-done"
+                />
+                <span className="text-[10px] text-gray-400 font-bold leading-none tracking-wide">DONE</span>
+              </div>
+            </>
+          ) : isCondition ? (
             <>
               {/* YES port */}
               <div className="flex flex-col items-center gap-1">

@@ -32,6 +32,10 @@ function generateCampaignId(): string {
     return `bulk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 }
 
+// ── LocalStorage persistence keys ─────────────────────────────────────────────
+const VOICE_PREFS_KEY = 'bulkdialer_voice_prefs';
+const DRAFT_KEY       = 'bulkdialer_draft';
+
 // ── Campaign Template type ────────────────────────────────────────────────────
 interface CampaignTemplate {
     id: string;
@@ -169,16 +173,30 @@ export default function BulkDialer() {
     const [selectedVoice, setSelectedVoice] = useState('aravind');
     const [selectedTtsProvider, setSelectedTtsProvider] = useState('sarvam');
     const [selectedLanguage, setSelectedLanguage] = useState('en-IN');
+    const [speechSpeed, setSpeechSpeed] = useState(1.0);
 
     // ── Voice preview
     const [previewState, setPreviewState] = useState<"idle" | "loading" | "playing">("idle");
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
-    // ── Prompt editor refs
+    // ── Prompt & greeting editor refs
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const greetingInputRef  = useRef<HTMLInputElement>(null);
+    const formRef           = useRef<HTMLFormElement>(null);
+    // Track which field (prompt / greeting) was last focused for tag insertion
+    const [lastFocusedField, setLastFocusedField] = useState<'prompt' | 'greeting'>('prompt');
 
-    // ── Polling ref
-    const pollingRef = useRef<NodeJS.Timeout | null>(null);
+    // ── Polling ref + draft-save debounce
+    const pollingRef    = useRef<NodeJS.Timeout | null>(null);
+    const draftTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const [draftSaved, setDraftSaved] = useState(false);
+
+    // ── Run-again trigger (incremented by handleRunAgain to auto-resubmit)
+    const [runAgainTrigger, setRunAgainTrigger] = useState(0);
+
+    // ── File input keys (incremented to reset the browser file input DOM state)
+    const [leadsInputKey, setLeadsInputKey] = useState(Date.now());
+    const [ragInputKey, setRagInputKey] = useState(Date.now() + 1);
 
     // ── Load catalog & agent config
     const loadCatalog = async () => {
@@ -193,15 +211,48 @@ export default function BulkDialer() {
     };
 
     useEffect(() => {
+        // ① Restore last-used voice prefs instantly (before any API calls)
+        try {
+            const saved = localStorage.getItem(VOICE_PREFS_KEY);
+            if (saved) {
+                const prefs = JSON.parse(saved);
+                if (prefs.provider)    setSelectedProvider(prefs.provider);
+                if (prefs.ttsProvider) setSelectedTtsProvider(prefs.ttsProvider);
+                if (prefs.voice)       setSelectedVoice(prefs.voice);
+                if (prefs.language)    setSelectedLanguage(prefs.language);
+                if (prefs.speed)       setSpeechSpeed(prefs.speed);
+            }
+        } catch { /* ignore */ }
+
+        // ② Restore draft (prompt, greeting, agentName, RAG content, lead rows)
+        try {
+            const raw = localStorage.getItem(DRAFT_KEY);
+            if (raw) {
+                const d = JSON.parse(raw);
+                if (d.prompt)    setPrompt(d.prompt);
+                if (d.greeting)  setGreeting(d.greeting);
+                if (d.agentName) setAgentName(d.agentName);
+                if (d.ragContent && d.ragInfo) { setRagContent(d.ragContent); setRagInfo(d.ragInfo); }
+                if (d.leads?.length > 0 && d.columns?.length > 0) {
+                    setLeads(d.leads);
+                    setColumns(d.columns);
+                    setColumnMap(d.columnMap || { phone: '', name: '', email: '' });
+                    // File object can't be serialised — mark as draft-restored
+                    setLeadsFile({ name: `Draft restored · ${d.leads.length} leads` } as File);
+                }
+            }
+        } catch { /* ignore */ }
+
+        // ③ Load catalog + templates; only apply agent-config defaults if no saved prefs
         Promise.all([
             fetch('/api/agent-config?mode=outbound').then(r => r.json()).catch(() => null),
             loadCatalog(),
             loadTemplates(),
         ]).then(([configData]) => {
-            if (configData?.config) {
+            if (!localStorage.getItem(VOICE_PREFS_KEY) && configData?.config) {
                 if (configData.config.llm_provider) setSelectedProvider(configData.config.llm_provider);
                 if (configData.config.tts_provider) setSelectedTtsProvider(configData.config.tts_provider);
-                if (configData.config.tts_voice) setSelectedVoice(configData.config.tts_voice);
+                if (configData.config.tts_voice)    setSelectedVoice(configData.config.tts_voice);
                 if (configData.config.tts_language) setSelectedLanguage(configData.config.tts_language);
             }
         });
@@ -276,6 +327,39 @@ export default function BulkDialer() {
             setTemplates(prev => prev.filter(t => t.id !== id));
         } catch { /* non-fatal */ }
     };
+
+    // ── Persist last-used voice/LLM preferences to localStorage
+    useEffect(() => {
+        try {
+            localStorage.setItem(VOICE_PREFS_KEY, JSON.stringify({
+                provider: selectedProvider, ttsProvider: selectedTtsProvider,
+                voice: selectedVoice, language: selectedLanguage, speed: speechSpeed
+            }));
+        } catch { /* ignore — storage may be unavailable */ }
+    }, [selectedProvider, selectedTtsProvider, selectedVoice, selectedLanguage]);
+
+    // ── Debounce-save full draft to localStorage (prompt, greeting, RAG, leads)
+    useEffect(() => {
+        if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = setTimeout(() => {
+            try {
+                localStorage.setItem(DRAFT_KEY, JSON.stringify({
+                    prompt, greeting, agentName, ragContent, ragInfo,
+                    leads, columns, columnMap,
+                }));
+                setDraftSaved(true);
+                setTimeout(() => setDraftSaved(false), 2000);
+            } catch { /* storage full or unavailable */ }
+        }, 800);
+        return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
+    }, [prompt, greeting, agentName, ragContent, ragInfo, leads, columns, columnMap]);
+
+    // ── Auto-trigger Run Again once status resets to idle
+    useEffect(() => {
+        if (runAgainTrigger > 0 && status === 'idle') {
+            formRef.current?.requestSubmit();
+        }
+    }, [runAgainTrigger, status]);
 
     // ── Poll campaign results while dialing
     useEffect(() => {
@@ -439,6 +523,7 @@ export default function BulkDialer() {
                 ...Object.fromEntries(Object.entries(leadData).map(([k, v]) => [k.toLowerCase(), v])),
             };
             const resolvedPrompt = prompt.replace(/\{\{lead\.(\w+)\}\}/gi, (_, key) => leadValues[key.toLowerCase()] ?? `{{lead.${key}}}`);
+            const resolvedGreeting = greeting ? greeting.replace(/\{\{lead\.(\w+)\}\}/gi, (_, key) => leadValues[key.toLowerCase()] ?? `{{lead.${key}}}`) : greeting;
 
             try {
                 const res = await fetch('/api/dispatch', {
@@ -459,8 +544,14 @@ export default function BulkDialer() {
                         campaignId:    newCampaignId,
                         leadRowIndex:  i,
                         overrideSystemPrompt: true, // Bulk Dialer always overrides
-                        greeting:      greeting,
+                        greeting:      resolvedGreeting,
                         agentName:     agentName,
+                        // ── Dynamic per-call config: always send live UI values ──────────
+                        // The Python agent will use these directly, bypassing agent_config.json
+                        systemPrompt:   resolvedPrompt,   // bulk dialer prompt IS the system prompt
+                        llmModel:       catalog.llm[selectedProvider]?.models?.[0]?.value || "",
+                        initialGreeting: resolvedGreeting,
+                        ttsSpeed:       speechSpeed,
                     }),
                 });
                 if (res.ok) successCount++; else failCount++;
@@ -524,33 +615,68 @@ export default function BulkDialer() {
     const resultMap = new Map<number, CampaignResult>();
     campaignResults.forEach(r => resultMap.set(r.row_index, r));
 
-    // ── Live Prompt Preview
+    // ── Live Prompt Preview (row 1 substitution)
     const promptPreview = useMemo(() => {
         if (!prompt || leads.length === 0) return null;
-        let preview = prompt;
         const firstLead = leads[0];
-        // Match any {{lead.xxx}} ignoring case, and replace with actual value
-        preview = preview.replace(/\{\{lead\.([^}]+)\}\}/gi, (match, colName) => {
-            // Find a matching column name in the actual lead object (case insensitive)
+        return prompt.replace(/\{\{lead\.([^}]+)\}\}/gi, (match, colName) => {
             const realKey = Object.keys(firstLead).find(k => k.toLowerCase() === colName.trim().toLowerCase());
-            if (realKey && firstLead[realKey]) return firstLead[realKey];
-            return match; // Keep unresolved tags as is
+            return (realKey && firstLead[realKey]) ? firstLead[realKey] : match;
         });
-        return preview;
     }, [prompt, leads]);
 
+    // ── Live Greeting Preview (same substitution, row 1)
+    const greetingPreview = useMemo(() => {
+        if (!greeting || leads.length === 0) return null;
+        const firstLead = leads[0];
+        return greeting.replace(/\{\{lead\.([^}]+)\}\}/gi, (match, colName) => {
+            const realKey = Object.keys(firstLead).find(k => k.toLowerCase() === colName.trim().toLowerCase());
+            return (realKey && firstLead[realKey]) ? firstLead[realKey] : match;
+        });
+    }, [greeting, leads]);
+
+    // ── Insert tag into whichever field was last focused (greeting or prompt)
     const handleInsertTag = (column: string) => {
-        if (!promptTextareaRef.current) return;
-        const el = promptTextareaRef.current;
-        const start = el.selectionStart;
-        const end = el.selectionEnd;
         const tag = `{{lead.${column}}}`;
-        const newText = prompt.substring(0, start) + tag + prompt.substring(end);
-        setPrompt(newText);
-        setTimeout(() => {
-            el.focus();
-            el.setSelectionRange(start + tag.length, start + tag.length);
-        }, 0);
+        if (lastFocusedField === 'greeting' && greetingInputRef.current) {
+            const el = greetingInputRef.current;
+            const start = el.selectionStart ?? greeting.length;
+            const end   = el.selectionEnd   ?? greeting.length;
+            setGreeting(greeting.substring(0, start) + tag + greeting.substring(end));
+            setTimeout(() => { el.focus(); el.setSelectionRange(start + tag.length, start + tag.length); }, 0);
+        } else if (promptTextareaRef.current) {
+            const el = promptTextareaRef.current;
+            const start = el.selectionStart ?? prompt.length;
+            const end   = el.selectionEnd   ?? prompt.length;
+            setPrompt(prompt.substring(0, start) + tag + prompt.substring(end));
+            setTimeout(() => { el.focus(); el.setSelectionRange(start + tag.length, start + tag.length); }, 0);
+        }
+    };
+
+    // ── Clear lead file (keep prompt/voice config intact)
+    const handleClearLeads = (e: React.MouseEvent) => {
+        e.preventDefault(); e.stopPropagation();
+        setLeadsFile(null); setColumns([]); setLeads([]);
+        setColumnMap({ phone: '', name: '', email: '' }); setParseError('');
+        setLeadsInputKey(Date.now());
+    };
+
+    // ── Clear RAG knowledge base
+    const handleClearRag = (e: React.MouseEvent) => {
+        e.preventDefault(); e.stopPropagation();
+        setRagFile(null); setRagContent(''); setRagInfo(null);
+        setRagInputKey(Date.now());
+    };
+
+    // ── Run Again — reuse same config, re-dial same leads
+    const handleRunAgain = () => {
+        cancelRef.current = false;
+        setIsCancelled(false);
+        setCampaignResults([]);
+        setProgress({ total: 0, current: 0 });
+        setMessage('');
+        setStatus('idle');
+        setRunAgainTrigger(t => t + 1);   // triggers auto-submit useEffect
     };
 
     // ── Render ─────────────────────────────────────────────────────────────────
@@ -583,7 +709,7 @@ export default function BulkDialer() {
                     </div>
                 </div>
 
-                <form onSubmit={handleStartCampaign} className="space-y-5">
+                <form ref={formRef} onSubmit={handleStartCampaign} className="space-y-5" id="bulk-campaign-form">
 
                     {/* ── Campaign Templates Panel */}
                     <div className="rounded-xl border border-[#a371f7]/30 bg-[#a371f7]/5 overflow-hidden">
@@ -672,23 +798,31 @@ export default function BulkDialer() {
                             </div>
 
                             {/* Dropzone */}
-                            <label className={`flex flex-col items-center justify-center w-full h-28 rounded-lg border-2 border-dashed cursor-pointer transition-colors
-                                ${leadsFile ? 'border-[#2f81f7]/50 bg-[#2f81f7]/5' : 'border-[#30363d] hover:border-[#8b949e] hover:bg-[#21262d]'}`}>
-                                <input type="file" accept=".csv,.xlsx,.xls,.txt" className="hidden"
-                                    onChange={e => { if (e.target.files?.[0]) handleLeadsFile(e.target.files[0]); }} />
-                                {leadsFile ? (
-                                    <div className="flex flex-col items-center gap-1">
-                                        <CheckCircle2 className="w-6 h-6 text-[#2f81f7]" />
-                                        <span className="text-sm font-medium text-[#e6edf3]">{leadsFile.name}</span>
-                                        <span className="text-xs text-[#8b949e]">{leads.length} leads detected</span>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-center gap-1">
-                                        <Upload className="w-6 h-6 text-[#8b949e]" />
-                                        <span className="text-sm text-[#8b949e]">Click or drag to upload leads file</span>
-                                    </div>
+                            <div className="relative">
+                                <label className={`flex flex-col items-center justify-center w-full h-28 rounded-lg border-2 border-dashed cursor-pointer transition-colors
+                                    ${leadsFile ? 'border-[#2f81f7]/50 bg-[#2f81f7]/5' : 'border-[#30363d] hover:border-[#8b949e] hover:bg-[#21262d]'}`}>
+                                    <input key={leadsInputKey} type="file" accept=".csv,.xlsx,.xls,.txt" className="hidden"
+                                        onChange={e => { if (e.target.files?.[0]) handleLeadsFile(e.target.files[0]); }} />
+                                    {leadsFile ? (
+                                        <div className="flex flex-col items-center gap-1">
+                                            <CheckCircle2 className="w-6 h-6 text-[#2f81f7]" />
+                                            <span className="text-sm font-medium text-[#e6edf3]">{leadsFile.name}</span>
+                                            <span className="text-xs text-[#8b949e]">{leads.length} leads — click to replace</span>
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center gap-1">
+                                            <Upload className="w-6 h-6 text-[#8b949e]" />
+                                            <span className="text-sm text-[#8b949e]">Click or drag to upload leads file</span>
+                                        </div>
+                                    )}
+                                </label>
+                                {leadsFile && (
+                                    <button type="button" onClick={handleClearLeads} title="Remove file"
+                                        className="absolute top-2 right-2 p-1 rounded-full bg-[#21262d] border border-[#30363d] text-[#8b949e] hover:text-[#f85149] hover:border-[#f85149]/40 transition-colors z-10">
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
                                 )}
-                            </label>
+                            </div>
                             {parseError && <p className="text-xs text-[#f85149] flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" />{parseError}</p>}
 
                             {/* Column mapping */}
@@ -744,31 +878,39 @@ export default function BulkDialer() {
                             </a>
                         </div>
                         <div className="p-4">
-                            <label className={`flex flex-col items-center justify-center w-full h-20 rounded-lg border-2 border-dashed cursor-pointer transition-colors
-                                ${ragInfo ? 'border-[#a371f7]/50 bg-[#a371f7]/5' : 'border-[#30363d] hover:border-[#8b949e] hover:bg-[#21262d]'}`}>
-                                <input type="file" accept=".pdf,.docx,.doc,.txt,.csv,.md" className="hidden"
-                                    onChange={e => { if (e.target.files?.[0]) handleRagFile(e.target.files[0]); }} />
-                                {ragLoading ? (
-                                    <div className="flex items-center gap-2">
-                                        <Loader2 className="w-4 h-4 text-[#a371f7] animate-spin" />
-                                        <span className="text-xs text-[#8b949e]">Processing file…</span>
-                                    </div>
-                                ) : ragInfo ? (
-                                    <div className="flex flex-col items-center gap-0.5">
-                                        <CheckCircle2 className="w-5 h-5 text-[#a371f7]" />
-                                        <span className="text-xs font-medium text-[#e6edf3]">{ragInfo.fileName}</span>
-                                        <span className="text-[10px] text-[#8b949e]">
-                                            {ragInfo.charCount.toLocaleString()} characters loaded
-                                            {ragInfo.truncated && ' (truncated to fit)'}
-                                        </span>
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-center gap-1">
-                                        <Brain className="w-5 h-5 text-[#8b949e]" />
-                                        <span className="text-xs text-[#8b949e]">Attach company/product knowledge base (PDF, DOCX, TXT)</span>
-                                    </div>
+                            <div className="relative">
+                                <label className={`flex flex-col items-center justify-center w-full h-20 rounded-lg border-2 border-dashed cursor-pointer transition-colors
+                                    ${ragInfo ? 'border-[#a371f7]/50 bg-[#a371f7]/5' : 'border-[#30363d] hover:border-[#8b949e] hover:bg-[#21262d]'}`}>
+                                    <input key={ragInputKey} type="file" accept=".pdf,.docx,.doc,.txt,.csv,.md" className="hidden"
+                                        onChange={e => { if (e.target.files?.[0]) handleRagFile(e.target.files[0]); }} />
+                                    {ragLoading ? (
+                                        <div className="flex items-center gap-2">
+                                            <Loader2 className="w-4 h-4 text-[#a371f7] animate-spin" />
+                                            <span className="text-xs text-[#8b949e]">Processing file…</span>
+                                        </div>
+                                    ) : ragInfo ? (
+                                        <div className="flex flex-col items-center gap-0.5">
+                                            <CheckCircle2 className="w-5 h-5 text-[#a371f7]" />
+                                            <span className="text-xs font-medium text-[#e6edf3]">{ragInfo.fileName}</span>
+                                            <span className="text-[10px] text-[#8b949e]">
+                                                {ragInfo.charCount.toLocaleString()} characters loaded
+                                                {ragInfo.truncated && ' (truncated to fit)'}
+                                            </span>
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center gap-1">
+                                            <Brain className="w-5 h-5 text-[#8b949e]" />
+                                            <span className="text-xs text-[#8b949e]">Attach company/product knowledge base (PDF, DOCX, TXT)</span>
+                                        </div>
+                                    )}
+                                </label>
+                                {ragInfo && !ragLoading && (
+                                    <button type="button" onClick={handleClearRag} title="Remove knowledge base"
+                                        className="absolute top-2 right-2 p-1 rounded-full bg-[#21262d] border border-[#30363d] text-[#8b949e] hover:text-[#f85149] hover:border-[#f85149]/40 transition-colors z-10">
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
                                 )}
-                            </label>
+                            </div>
                         </div>
                     </div>
 
@@ -793,10 +935,19 @@ export default function BulkDialer() {
                                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[#30363d] bg-[#0d1117] text-[#e6edf3] placeholder-[#484f58] focus:outline-none focus:ring-1 focus:ring-[#3fb950]/50" />
                                 </div>
                                 <div>
-                                    <label className="block text-[10px] font-semibold text-[#8b949e] uppercase tracking-wider mb-1">Initial Greeting (optional)</label>
-                                    <input type="text" value={greeting} onChange={e => setGreeting(e.target.value)}
-                                        placeholder="Hello, this is Priya from XYZ. Is this a good time?"
+                                    <label className="block text-[10px] font-semibold text-[#8b949e] uppercase tracking-wider mb-1">Initial Greeting (optional) — supports {`{{lead.X}}`} tags</label>
+                                    <input
+                                        ref={greetingInputRef}
+                                        type="text" value={greeting}
+                                        onChange={e => setGreeting(e.target.value)}
+                                        onFocus={() => setLastFocusedField('greeting')}
+                                        placeholder="Namaste {{lead.name}} ji, main Priya bol rahi hoon…"
                                         className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[#30363d] bg-[#0d1117] text-[#e6edf3] placeholder-[#484f58] focus:outline-none focus:ring-1 focus:ring-[#3fb950]/50" />
+                                    {greetingPreview && greetingPreview !== greeting && (
+                                        <p className="mt-1 text-[10px] text-[#3fb950] truncate" title={greetingPreview}>
+                                            ▶ {greetingPreview}
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                             {/* System Prompt Builder */}
@@ -805,6 +956,7 @@ export default function BulkDialer() {
                                 <textarea
                                     ref={promptTextareaRef}
                                     value={prompt} onChange={e => setPrompt(e.target.value)} rows={5}
+                                    onFocus={() => setLastFocusedField('prompt')}
                                     placeholder="Define the agent's full persona and campaign goal. Use {{lead.name}}, {{lead.city}}, {{lead.budget}} etc. to personalise per lead."
                                     className="w-full px-3 py-2 text-sm rounded-lg border border-[#30363d] bg-[#0d1117] text-[#e6edf3] placeholder-[#484f58] focus:outline-none focus:ring-1 focus:ring-[#3fb950]/50 resize-none" />
                                 
@@ -813,7 +965,9 @@ export default function BulkDialer() {
                                     <div className="mt-3 p-3 rounded-lg bg-[#0d1117] border border-[#30363d]/60">
                                         <p className="text-[10px] font-semibold text-[#8b949e] uppercase tracking-wider mb-2 flex items-center gap-1.5">
                                             Dynamic Entities
-                                            <span className="normal-case font-normal text-[#484f58]">(Drag or click to insert)</span>
+                                            <span className="normal-case font-normal text-[#484f58]">
+                                                — click to insert into <span className="text-[#3fb950]">{lastFocusedField === 'greeting' ? 'greeting ↑' : 'prompt ↓'}</span>
+                                            </span>
                                         </p>
                                         <div className="flex flex-wrap gap-2">
                                             {columns.map(col => (
@@ -911,6 +1065,27 @@ export default function BulkDialer() {
                                     {previewState === 'loading' ? 'Loading preview…' : previewState === 'playing' ? 'Stop preview' : 'Preview voice'}
                                 </button>
                             </div>
+                            {/* Speech Speed Slider */}
+                            <div className="col-span-2 md:col-span-4 mt-2">
+                                <label className="block text-[10px] font-semibold text-[#8b949e] uppercase tracking-wider mb-2">
+                                    Speech Speed: {speechSpeed.toFixed(1)}x
+                                </label>
+                                <input 
+                                    type="range" 
+                                    min="0.5" max="2.0" step="0.1" 
+                                    value={speechSpeed} 
+                                    onChange={e => setSpeechSpeed(parseFloat(e.target.value))}
+                                    className="w-full accent-[#3fb950]"
+                                />
+                                <div className="flex justify-between text-[10px] text-[#8b949e] mt-1 px-1">
+                                    <span>0.5x</span>
+                                    <span>1.0x</span>
+                                    <span>2.0x</span>
+                                </div>
+                                <p className="text-[10px] text-[#484f58] mt-2 italic">
+                                    Note: Some TTS providers (like Sarvam) may not natively support hot-swapping speech speed and will default to 1.0x.
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -922,7 +1097,12 @@ export default function BulkDialer() {
                         </div>
                     )}
 
-                    {/* ── Start button */}
+                    {/* ── Draft auto-save indicator */}
+                    {draftSaved && (
+                        <p className="text-center text-[10px] text-[#3fb950] animate-pulse">✓ Draft auto-saved</p>
+                    )}
+
+                    {/* ── Start button (idle / error state) */}
                     {!isRunning && status !== 'completed' && (
                         <button type="submit" disabled={leads.length === 0 || !columnMap.phone || ragLoading}
                             className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white
@@ -933,6 +1113,28 @@ export default function BulkDialer() {
                             <Play className="w-4 h-4" />
                             Start Campaign ({leads.filter(l => l[columnMap.phone]?.trim().length >= 10).length} leads)
                         </button>
+                    )}
+
+                    {/* ── Run Again / New Campaign buttons (completed state) */}
+                    {!isRunning && status === 'completed' && (
+                        <div className="flex gap-3">
+                            <button type="button" onClick={handleRunAgain}
+                                disabled={leads.length === 0 || !columnMap.phone}
+                                className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold text-white
+                                    bg-gradient-to-r from-[#3fb950] to-[#2f81f7]
+                                    hover:from-[#2fa040] hover:to-[#1f71e7]
+                                    disabled:opacity-40 disabled:cursor-not-allowed
+                                    shadow-lg shadow-[#3fb950]/20 transition-all active:scale-[0.99]">
+                                <RefreshCw className="w-4 h-4" />
+                                Run Again ({leads.filter(l => l[columnMap.phone]?.trim().length >= 10).length} leads)
+                            </button>
+                            <button type="button" onClick={handleReset}
+                                className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-bold
+                                    text-[#f85149] border border-[#f85149]/30 hover:bg-[#f85149]/10 transition-all">
+                                <X className="w-4 h-4" />
+                                New
+                            </button>
+                        </div>
                     )}
                 </form>
 

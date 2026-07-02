@@ -188,8 +188,13 @@ export default function CallDispatcher() {
                     ttsLanguage: selectedLanguage,
                     // Signal the Python agent to fully override the base config
                     overrideSystemPrompt: !!systemPrompt.trim(),
-                    greeting: initialGreeting,
+                    greeting: greeting,
                     agentName: agentName,
+                    // ── Dynamic per-call config: always send live UI values ──────────
+                    // Python agent reads these and overrides ws_config directly
+                    systemPrompt:    systemPrompt.trim(),
+                    llmModel:        catalog.llm[selectedProvider]?.models?.[0]?.value || "",
+                    initialGreeting: greeting,
                 }),
             });
             const data = await res.json();

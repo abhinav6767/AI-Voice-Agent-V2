@@ -164,6 +164,42 @@ async def analyze_and_save_call(
             except Exception as wb_err:
                 logger.warning(f"[ANALYTICS] Workflow webhook failed (non-fatal): {wb_err}")
 
+        # ── Workflow Execution Engine: fire call_completed event ──────────────
+        # This notifies the workflow engine so any active workflow with a
+        # "call_completed" trigger will execute automatically for this call.
+        try:
+            import urllib.request as _req
+            dashboard_url = os.getenv("DASHBOARD_URL", "http://localhost:3000").rstrip("/")
+            # Extract lead name from analysis if available
+            user_info = analysis.get("user_info", {}) or {}
+            lead_name = user_info.get("name", "") or ""
+            lead_email_val = lead_email or user_info.get("email", "") or ""
+            event_payload = json.dumps({
+                "eventType": "call_completed",
+                "payload": {
+                    "phone": phone_number,
+                    "name": lead_name,
+                    "email": lead_email_val,
+                    "direction": direction,
+                    "sentiment": analysis.get("sentiment", "Neutral").lower(),
+                    "summary": analysis.get("summary", ""),
+                    "transcript": full_transcript[:3000],  # truncate for payload size
+                    "caller_intent": analysis.get("caller_intent", ""),
+                    "campaign_id": campaign_id,
+                    "workflow_run_id": workflow_run_id,
+                }
+            }).encode()
+            wf_req = _req.Request(
+                f"{dashboard_url}/api/workflow/trigger",
+                data=event_payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            _req.urlopen(wf_req, timeout=10)
+            logger.info(f"[ANALYTICS] call_completed event fired to workflow engine for {phone_number}")
+        except Exception as wf_err:
+            logger.warning(f"[ANALYTICS] Workflow trigger failed (non-fatal): {wf_err}")
+
     except Exception as e:
         logger.error(f"[ANALYTICS] Failed to analyze/save call log: {e}")
 

@@ -4,8 +4,9 @@ import React, { useState, useEffect, useCallback } from "react";
 import { getWorkflows } from "@/lib/workflow-actions";
 import WorkflowList from "@/components/workflows/WorkflowList";
 import AiGenerateModal from "@/components/workflows/AiGenerateModal";
+import WorkflowRunLog from "@/components/workflows/WorkflowRunLog";
 import type { Workflow } from "@/lib/workflow-types";
-import { Sparkles, ArrowRight } from "lucide-react";
+import { Sparkles, ArrowRight, Clock, Play, X } from "lucide-react";
 
 // ── Inline AI Quick-Prompt Banner ─────────────────────────────────────────────
 
@@ -99,6 +100,9 @@ export default function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [showAiModal, setShowAiModal] = useState(false);
   const [prefilledPrompt, setPrefilledPrompt] = useState("");
+  const [showRunLog, setShowRunLog] = useState(false);
+  const [runLogWorkflowId, setRunLogWorkflowId] = useState<string | undefined>(undefined);
+  const [manualRunning, setManualRunning] = useState<string | null>(null);
 
   const fetchWorkflows = useCallback(async () => {
     setLoading(true);
@@ -116,9 +120,46 @@ export default function WorkflowsPage() {
     fetchWorkflows();
   }, [fetchWorkflows]);
 
+  // Poll the cron endpoint once a minute to handle scheduled workflows
+  useEffect(() => {
+    const fireCron = () => fetch("/api/workflow/cron").catch(() => {});
+    fireCron();
+    const t = setInterval(fireCron, 60000);
+    return () => clearInterval(t);
+  }, []);
+
   const openAiModal = (prompt?: string) => {
     setPrefilledPrompt(prompt || "");
     setShowAiModal(true);
+  };
+
+  const openRunLog = (workflowId?: string) => {
+    setRunLogWorkflowId(workflowId);
+    setShowRunLog(true);
+  };
+
+  const handleManualRun = async (workflowId: string) => {
+    setManualRunning(workflowId);
+    try {
+      const res = await fetch("/api/workflow/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventType: "manual",
+          payload: { manual: true, triggeredAt: new Date().toISOString() },
+        }),
+      });
+      const data = await res.json();
+      if (data.triggered > 0) {
+        openRunLog(workflowId);
+      } else {
+        alert("No active workflow with a 'Manual Trigger' matched. Make sure the workflow is active and uses a Manual Trigger node.");
+      }
+    } catch {
+      alert("Failed to run workflow. Check console for errors.");
+    } finally {
+      setManualRunning(null);
+    }
   };
 
   if (loading) {
@@ -134,16 +175,46 @@ export default function WorkflowsPage() {
 
   return (
     <div className="h-full flex flex-col transition-colors duration-200">
-      {/* AI Prompt Banner */}
-      <AiPromptBanner onOpen={openAiModal} />
+      {/* Top bar with Run History button */}
+      <div className="flex items-center justify-end mb-4 flex-shrink-0">
+        <button
+          onClick={() => openRunLog(undefined)}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-gray-700 dark:text-[#c9d1d9] border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#21262d] hover:bg-gray-50 dark:hover:bg-[#30363d] transition-all"
+        >
+          <Clock className="w-3.5 h-3.5" />
+          Run History
+        </button>
+      </div>
 
-      {/* Workflow list */}
-      <WorkflowList
-        workflows={workflows}
-        onRefresh={fetchWorkflows}
-      />
+      <div className="flex flex-1 gap-6 overflow-hidden">
+        {/* Main Content */}
+        <div className={`flex flex-col flex-1 overflow-y-auto transition-all ${showRunLog ? "pr-2" : ""}`}>
+          {/* AI Prompt Banner */}
+          <AiPromptBanner onOpen={openAiModal} />
 
-      {/* AI Modal (triggered from banner or WorkflowList header) */}
+          {/* Workflow list */}
+          <WorkflowList
+            workflows={workflows}
+            onRefresh={fetchWorkflows}
+            onViewRuns={openRunLog}
+            onManualRun={handleManualRun}
+            manualRunning={manualRunning}
+          />
+        </div>
+
+        {/* Run Log Side Panel */}
+        {showRunLog && (
+          <div className="w-[480px] flex-shrink-0 rounded-xl border border-gray-200 dark:border-[#30363d] overflow-hidden shadow-xl dark:shadow-[0_4px_24px_rgba(0,0,0,0.4)]">
+            <WorkflowRunLog
+              workflowId={runLogWorkflowId}
+              onClose={() => setShowRunLog(false)}
+              onManualRun={handleManualRun}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* AI Modal */}
       <AiGenerateModal
         isOpen={showAiModal}
         onClose={() => { setShowAiModal(false); setPrefilledPrompt(""); }}

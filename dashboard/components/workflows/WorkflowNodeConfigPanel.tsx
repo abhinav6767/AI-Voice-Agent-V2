@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useRef } from "react";
-import { X, Info, Plus, Trash2, Pin, PinOff, ChevronDown, ChevronUp, Copy, Check, AlertCircle, Code2, Zap, Loader2, Edit2, Save } from "lucide-react";
+import { X, Info, Plus, Trash2, Pin, PinOff, ChevronDown, ChevronUp, Copy, Check, AlertCircle, Code2, Zap, Loader2, Edit2, Save, UploadCloud } from "lucide-react";
 import type { WorkflowNode, SwitchRule } from "@/lib/workflow-types";
 import { getNodeMetadata } from "@/lib/workflow-types";
 
@@ -70,6 +70,99 @@ function SchemaView({ data, path = "$json", showTypes = false }: { data: any; pa
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// -- CSV Drag & Drop Uploader ---------------------------------------------------
+function CsvUploader({ value, onChange }: { value: string; onChange: (path: string) => void }) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = async (file: File) => {
+    setError("");
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("Only .csv files are allowed.");
+      return;
+    }
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/workflow/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to upload");
+      
+      onChange(data.file.path);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <label className="block text-[11px] font-semibold text-gray-700 dark:text-[#c9d1d9] mb-1">
+        CSV File
+      </label>
+      
+      <div 
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={onDrop}
+        className={`relative flex flex-col items-center justify-center p-4 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+          isDragging ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10" : "border-gray-300 dark:border-[#30363d] bg-gray-50 hover:bg-gray-100 dark:bg-[#0d1117] dark:hover:bg-[#161b22]"
+        }`}
+      >
+        <input 
+          type="file" 
+          accept=".csv" 
+          className="hidden" 
+          ref={inputRef} 
+          onChange={(e) => {
+            if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+          }}
+        />
+        
+        {isUploading ? (
+          <div className="flex flex-col items-center justify-center text-indigo-500 gap-2">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span className="text-xs font-medium">Uploading...</span>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-gray-500 dark:text-[#8b949e] gap-1">
+            <UploadCloud className="w-6 h-6 mb-1 text-gray-400" />
+            <span className="text-xs font-medium text-gray-700 dark:text-[#c9d1d9]">Click to upload or drag & drop</span>
+            <span className="text-[10px]">CSV files only</span>
+          </div>
+        )}
+      </div>
+
+      {error && <p className="text-[10px] text-red-500 mt-1">{error}</p>}
+      
+      {value && !isUploading && (
+        <div className="flex items-center gap-1.5 mt-2 bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-400 p-2 rounded border border-green-200 dark:border-green-500/20 text-[11px] font-mono break-all">
+          <Check className="w-3.5 h-3.5 flex-shrink-0" />
+          {value}
+        </div>
+      )}
     </div>
   );
 }
@@ -1356,6 +1449,29 @@ export default function WorkflowNodeConfigPanel({ node, onClose, onUpdate, execu
           <div className="space-y-3">
             <TextAreaField label="Note Content" value={node.config.content || ""} onChange={(v) => update("content", v)} placeholder="Add context, reminders, or documentation here..." rows={5} />
             <SelectField label="Color" value={node.config.color || "yellow"} onChange={(v) => update("color", v)} options={[{ value: "yellow", label: "🟡 Yellow" }, { value: "blue", label: "🔵 Blue" }, { value: "green", label: "🟢 Green" }, { value: "pink", label: "🩷 Pink" }, { value: "orange", label: "🟠 Orange" }]} />
+          </div>
+        );
+
+      case "read_csv_leads":
+        return (
+          <div className="space-y-3">
+            <CsvUploader 
+              value={node.config.filePath || ""}
+              onChange={(v) => update("filePath", v)}
+            />
+            <div className="text-center text-xs text-gray-400 dark:text-[#8b949e] font-mono my-1">- OR -</div>
+            <InputField 
+              label="Manual CSV Path (Advanced)" 
+              value={node.config.filePath || ""} 
+              onChange={(v) => update("filePath", v)} 
+              placeholder="../data/leads.csv" 
+            />
+            <NumberField 
+              label="Row Limit (0 for no limit)" 
+              value={node.config.limit || 0} 
+              onChange={(v) => update("limit", v)} 
+              min={0} 
+            />
           </div>
         );
 

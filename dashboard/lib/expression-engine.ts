@@ -23,6 +23,8 @@ export interface ExpressionContext {
   lead?: Record<string, any>;
   /** Legacy call object (backwards compat) */
   call?: Record<string, any>;
+  /** Loop tracking state keyed by loop_items node ID */
+  $loopState?: Record<string, { index: number; items: any[] }>;
 }
 
 /**

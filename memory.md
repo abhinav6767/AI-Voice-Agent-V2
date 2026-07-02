@@ -3,6 +3,59 @@
 ---
 ## Changelog
 
+### 2026-07-02 - BulkDialer 5 UX Enhancements
+* **Greeting dynamic tags:** Initial Greeting field now supports `{{lead.X}}` placeholders with a live resolved preview (green text below the field).
+* **Focus-aware tag insertion:** Clicking a Dynamic Entity chip inserts the tag into whichever field (greeting or prompt) was last focused. Chip label updates to show "insert into greeting ↑" vs "insert into prompt ↓".
+* **Run Again:** After campaign completes, a green "Run Again" button re-dials the same lead list with the same config without full reset. "New Campaign" button still does full reset.
+* **File remove buttons:** ✕ icon overlaid on the leads dropzone and RAG dropzone allows clearing the file to upload a different one.
+* **File re-upload fix:** Added React `key` state to file inputs that increments on clear. This forces the DOM input to remount, solving the browser bug where selecting the exact same file after clearing wouldn't trigger `onChange`.
+* **Offline draft persistence:** All form state (prompt, greeting, agentName, RAG content, lead rows, column mapping) is debounce-saved to `localStorage` key `bulkdialer_draft` every 800ms. Restored on page load. Shows "✓ Draft auto-saved" indicator.
+* **Last-used voice/LLM memory:** `selectedProvider`, `selectedTtsProvider`, `selectedVoice`, `selectedLanguage` are persisted to `localStorage` key `bulkdialer_voice_prefs` on every change and restored instantly on mount (before API calls).
+* **Inbound Greeting Fix:** Added missing `await` to `self.session.say()` inside `agent_inbound.py`'s `on_enter` method. This ensures the greeting actually plays and the conversational turn loop properly engages.
+* **Outbound Greeting Fix:** Refactored outbound greeting to also fire from inside the `OutboundAssistant.on_enter()` lifecycle method. We pass an `asyncio.Event()` to sync the greeting so it waits until the SIP call actually connects, solving the "speech scheduling is paused" bug caused by firing `session.say()` out-of-band in the entrypoint.
+* **Outbound Turn Detection Fix:** Changed `turn_detection="server_vad"` to `"vad"` and fixed endpointing timeouts to use seconds (`0.4`, `1.5`) instead of milliseconds (`400`, `1500`) which were causing the agent to wait 400 seconds before speaking.
+* **Outbound Startup & Latency Fix:** Wrapped the SIP connection `wait()` inside `OutboundAssistant.on_enter()` in a background task so it doesn't block STT/VAD pipeline initialization while the phone rings. Also upgraded STT default to `nova-3` and removed hardcoded `base_url` to match inbound agent's low-latency config.
+* **Outbound Transcript Logging:** Copied the `@session.on` transcript and state-change event handlers from the inbound agent to the outbound agent so that real-time transcription and agent states are logged to the console.
+* **Dynamic Tags in Greeting:** Updated `BulkDialer.tsx` to apply `{{lead.X}}` substitutions to the `initialGreeting` string before sending it to the API, fixing the issue where dynamic names only worked in the system prompt.
+* **Voice Provider UI Fix:** Added a `useEffect` to `BulkDialer.tsx` to force-reset `selectedVoice` to a valid option if the user swaps to a provider (like Sarvam) but `localStorage` held an invalid voice ID from a previous provider. This fixes the `Speaker 'anushka' is not compatible with model 'bulbul:v3'` crash.
+* **Speech Speed UI:** Added a Speech Speed slider (0.5x to 2.0x) to the Bulk Dialer's Voice & Model settings. Sent via `ttsSpeed` metadata to the Python agents.
+* **Inbound Gemini Crash Fix:** Modified `agent_inbound.py`'s `_build_llm` to bypass the unstable `google-genai` Python SDK plugin which was crashing with `no response generated, status_code=-1`. It now uses the hyper-stable OpenAI-compatible endpoint for Gemini (`generativelanguage.googleapis.com`), matching the exact setup used by the outbound agent.
+* **Changed:** `dashboard/components/BulkDialer.tsx`, `dashboard/app/api/dispatch/route.ts`, `agent_outbound.py`, `agent_inbound.py`.
+
+### 2026-07-02 - Dynamic Per-Call Agent Config (UI → Agent at Call Time)
+* **Change:** Agent config (system prompt, LLM model, LLM temperature, initial greeting, fallback greeting) is now passed through dispatch metadata on every call — no more dependency on `data/agent_config.json` at call time.
+* **Changed:** `dashboard/app/api/dispatch/route.ts` — accepts `systemPrompt`, `llmModel`, `llmTemperature`, `initialGreeting`, `fallbackGreeting` from request body and includes them in LiveKit room/job metadata.
+* **Changed:** `agent_outbound.py` — after `load_workspace_config`, applies metadata overrides to `ws_config` fields (`system_prompt`, `llm_model`, `llm_temperature`, `initial_greeting`, `fallback_greeting`).
+* **Changed:** `agent_inbound.py` — same metadata override pattern as outbound.
+* **Changed:** `dashboard/components/BulkDialer.tsx` — passes `systemPrompt` (= resolved per-lead prompt), `llmModel`, `initialGreeting` to dispatch API on every campaign call.
+* **Changed:** `dashboard/components/CallDispatcher.tsx` — passes `systemPrompt`, `llmModel`, `initialGreeting` to dispatch API on every single-dial call.
+* **How it works:** UI sets config → clicks Dial/Start Campaign → dispatch API receives live values → metadata embedded in LiveKit room → Python agent reads metadata on job start → overrides ws_config → agent uses exact UI values. `data/agent_config.json` still saves for form persistence on page reload but is no longer the source of truth for live calls.
+
+### 2026-07-02 - Fix 3 Outbound Bulk Dialer Errors
+* **Bug:** `data/agent_config.json` was empty (0 bytes) causing `json.load()` to throw `Expecting value: line 1 column 1 (char 0)` on every agent start. The static fallback path couldn't load any config, leaving `outbound_trunk_id = None`.
+* **Fix:** Populated `data/agent_config.json` with valid default config for both `outbound` and `inbound` modes using `ishita` voice.
+* **Bug:** Dashboard API route defaults in `dashboard/app/api/agent-config/route.ts` still had `tts_voice: "anushka"` for both modes. Sarvam dropped `anushka` from `bulbul:v3`, causing `ValueError` crash on every call session.
+* **Fix:** Updated both inbound and outbound defaults from `"anushka"` → `"ishita"` in `route.ts`.
+* **Root cause chain:** Empty JSON → no trunk ID loaded → `TwirpError: missing sip trunk id` on dial. Fixed by restoring the JSON file.
+
+### 2026-07-02 - Drag & Drop CSV Uploader
+New: Added `api/workflow/upload/route.ts` API endpoint to handle generic CSV file uploads for workflows. 
+New: Upgraded the `read_csv_leads` node configuration UI with a Drag & Drop zone allowing users to upload a CSV directly instead of manually typing file paths. Uploaded files are automatically saved with a timestamp prefix to `data/workflow_uploads`.
+### 2026-07-02 - Workflow Loops & Leads Integration
+New: `read_csv_leads` action node to easily load `data/leads.csv` directly into workflows without needing external API calls.
+Changed: `loop_items` node now behaves like n8n — it features distinct `loop` (purple) and `done` (gray) output ports visually on the canvas.
+Changed: `workflow-executor.ts` now supports true graph cycles by replacing the strict `visited` Set with a node visit counter map (preventing infinite loops by limiting max visits per node). `loop_items` automatically manages loop state and array iteration over the `loop` port.
+
+### 2026-07-02 - Phase 2: Workflow Execution Engine
+New: dashboard/lib/workflow-executor.ts — BFS node graph executor, all action handlers (Gmail, outbound call, HTTP, lead CRUD, tags, notes, notifications, WhatsApp), wait_delay file queue, run log writer (data/workflow_runs.json).
+New: dashboard/lib/workflow-trigger-engine.ts — matches incoming events to active workflows, fires scheduled cron workflows.
+New: /api/workflow/trigger (POST+GET), /api/workflow/runs (GET), /api/workflow/cron (GET) API routes.
+Changed: analytics.py — after every call, fires call_completed event to /api/workflow/trigger (non-fatal, won't break calls if dashboard is down).
+New: dashboard/components/workflows/WorkflowRunLog.tsx — run history panel with expandable step details, timing, output data, live polling every 5s.
+Changed: workflows/page.tsx — added Run History panel, cron polling via setInterval, manual Run Now support.
+Changed: WorkflowList.tsx — added History and Run Now buttons to each workflow card.
+Integration: The full event flow is: call ends → analytics.py → POST /api/workflow/trigger → trigger engine finds matching workflows → executor walks node graph → writes to data/workflow_runs.json → Run Log UI polls and shows live results.
+
 ### 2026-07-02 - Outbound Dialer Restructure + Campaign Templates
 Changed: AgentConfigForm.tsx — hides Agent Identity / System Prompt / Knowledge Base sections when mode=outbound (outbound uses per-call prompts, not global config). Added blue info banner.
 Changed: CallDispatcher.tsx (Single Dispatch) — fully rewrote to include Agent Persona (system prompt, name, greeting), Knowledge Base (RAG upload), and Additional Call Context sections. Custom system prompt fully overrides base config via overrideSystemPrompt flag.

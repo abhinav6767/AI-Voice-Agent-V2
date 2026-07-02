@@ -31,9 +31,12 @@ const TEMPLATE_ICON_MAP: Record<string, React.ElementType> = {
 interface Props {
   workflows: Workflow[];
   onRefresh: () => void;
+  onViewRuns?: (workflowId: string) => void;
+  onManualRun?: (workflowId: string) => void;
+  manualRunning?: string | null;
 }
 
-export default function WorkflowList({ workflows, onRefresh }: Props) {
+export default function WorkflowList({ workflows, onRefresh, onViewRuns, onManualRun, manualRunning }: Props) {
   const router = useRouter();
   const [showTemplates, setShowTemplates] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -303,13 +306,38 @@ export default function WorkflowList({ workflows, onRefresh }: Props) {
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                    <button
-                      onClick={() => router.push(`/workflows/builder?id=${workflow.id}`)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2f81f7] hover:bg-[#2f81f7]/10 transition-colors"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      Edit
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      {onViewRuns && (
+                        <button
+                          onClick={() => onViewRuns(workflow.id)}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium text-gray-500 dark:text-[#6e7681] border border-gray-200 dark:border-[#30363d] hover:bg-gray-50 dark:hover:bg-[#21262d] transition-colors"
+                        >
+                          <Clock className="w-3 h-3" />
+                          History
+                        </button>
+                      )}
+                      {onManualRun && (
+                        <button
+                          onClick={() => onManualRun(workflow.id)}
+                          disabled={manualRunning === workflow.id}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium text-[#3fb950] border border-[#3fb950]/30 hover:bg-green-50 dark:hover:bg-green-500/10 transition-colors disabled:opacity-50"
+                          title="Run this workflow now (requires Manual Trigger node)"
+                        >
+                          {manualRunning === workflow.id ? (
+                            <><RefreshCw className="w-3 h-3 animate-spin" />Running...</>
+                          ) : (
+                            <><Play className="w-3 h-3" />Run Now</>
+                          )}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => router.push(`/workflows/builder?id=${workflow.id}`)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2f81f7] hover:bg-[#2f81f7]/10 transition-colors"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Edit
+                      </button>
+                    </div>
                   </div>
                 </div>
 
