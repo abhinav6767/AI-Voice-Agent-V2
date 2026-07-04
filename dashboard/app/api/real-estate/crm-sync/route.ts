@@ -1,0 +1,147 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+// ── Phone normalization ─────────────────────────────────────────────────────
+// Strip all non-digit chars, take last 10 digits for matching
+function normalizePhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return digits.slice(-10);
+}
+
+interface CrmResult {
+  phone_number: string;
+  lead_email?: string;
+  lead_name?: string;
+  lead_data?: Record<string, string>;
+  status?: string;
+  remarks?: string;
+  sentiment?: string;
+  intent?: string;
+  interested_projects?: string[];
+  brochure_sent?: string;
+  campaign_id?: string;
+}
+
+// ── POST /api/real-estate/crm-sync ──────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Get business_id from profile
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("business_id")
+      .eq("auth_user_id", user.id)
+      .single();
+
+    if (!profile?.business_id) {
+      return NextResponse.json({ error: "No workspace found" }, { status: 403 });
+    }
+
+    const businessId = profile.business_id;
+    const { results } = await req.json();
+
+    if (!results || !Array.isArray(results) || results.length === 0) {
+      return NextResponse.json({ error: "results array is required" }, { status: 400 });
+    }
+
+    const synced = { created: 0, updated: 0, errors: 0 };
+
+    for (const result of results) {
+      try {
+        const phone = result.phone_number?.trim();
+        if (!phone) continue;
+
+        const normalized = normalizePhone(phone);
+        if (normalized.length < 7) continue; // skip invalid numbers
+
+        // Parse name
+        const fullName = result.lead_name?.trim() || "";
+        const nameParts = fullName.split(/\s+/);
+        const firstName = nameParts[0] || "";
+        const lastName = nameParts.slice(1).join(" ") || "";
+
+        // Build custom_fields for real estate
+        const customFields: Record<string, any> = {
+          ...(result.lead_data || {}),
+          email: result.lead_email || result.lead_data?.email || "",
+          last_call_date: new Date().toISOString(),
+          last_sentiment: result.sentiment || "",
+          last_intent: result.intent || "",
+          call_status: result.status === "Called" ? "contacted" :
+                      result.status === "No Answer" ? "no_answer" : "failed",
+          brochure_sent: result.brochure_sent || "",
+          interested_projects: result.interested_projects || [],
+          property_requirements: result.property_requirements || {},
+          source_campaign: result.campaign_id || "",
+          notes: result.remarks || "",
+        };
+
+        // Remove csv_data from custom_fields to avoid duplication
+        delete customFields.csv_data;
+
+        // Check if lead exists by normalized phone (match last 10 digits)
+        const { data: existing } = await supabase
+          .from("leads")
+          .select("id, custom_fields")
+          .eq("business_id", businessId)
+          .like("phone", `%${normalized}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (existing) {
+          // UPDATE: merge custom_fields
+          const merged = {
+            ...(existing.custom_fields || {}),
+            ...customFields,
+            call_count: ((existing.custom_fields as any)?.call_count || 0) + 1,
+          };
+
+          await supabase
+            .from("leads")
+            .update({
+              first_name: firstName || undefined,
+              last_name: lastName || undefined,
+              custom_fields: merged,
+              status: customFields.call_status === "contacted" ? "contacted" : undefined,
+            })
+            .eq("id", existing.id);
+
+          synced.updated++;
+        } else {
+          // INSERT: new lead
+          await supabase
+            .from("leads")
+            .insert({
+              business_id: businessId,
+              first_name: firstName,
+              last_name: lastName,
+              phone: phone, // store original format
+              status: "new",
+              custom_fields: {
+                ...customFields,
+                call_count: 1,
+                normalized_phone: normalized,
+              },
+            });
+
+          synced.created++;
+        }
+      } catch (err: any) {
+        console.error(`[CRM Sync] Error processing ${result.phone_number}:`, err.message);
+        synced.errors++;
+      }
+    }
+
+    console.log(`[CRM Sync] Business ${businessId}: ${synced.created} created, ${synced.updated} updated, ${synced.errors} errors`);
+
+    return NextResponse.json({ success: true, ...synced });
+  } catch (err: any) {
+    console.error("[CRM Sync]", err);
+    return NextResponse.json({ error: err.message || "CRM sync failed" }, { status: 500 });
+  }
+}

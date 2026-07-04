@@ -5,6 +5,43 @@ import os from "os";
 
 const MAX_CHARS = 8000; // LiveKit metadata size limit — truncate if needed
 
+// ── Clean extracted text: keep only English words, numbers, and basic punctuation ──
+function cleanExtractedText(raw: string): string {
+  let text = raw
+    .replace(/<[0-9A-Fa-f]{16,}>/g, "")
+    .replace(/<</g, "").replace(/>>/g, "")
+    .replace(/\bobj\b/gi, "").replace(/\bendobj\b/gi, "")
+    .replace(/\bstream\b/gi, "").replace(/\bendstream\b/gi, "")
+    .replace(/\bxref\b/gi, "").replace(/\btrailer\b/gi, "")
+    .replace(/\bstartxref\b/gi, "")
+    .replace(/\/Type\s*\/\w+/g, "")
+    .replace(/\/Font[^}]*}/g, "")
+    .replace(/\/[A-Z][a-zA-Z]+\s*=/g, "")
+    .replace(/\d+ \d+ R/g, "")
+    .replace(/\bPID[\s:]\S+/gi, "")
+    .replace(/UUID[\s:]\S+/gi, "");
+
+  text = text.replace(/[^a-zA-Z0-9\s.,;:!?\-/'()&%$@#+=<>*\n\r]/g, " ");
+
+  const lines = text.split(/\n/);
+  const cleaned = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (trimmed.length < 3) return false;
+    if (trimmed.length > 500) return false;
+    if (/^\d+$/.test(trimmed)) return false;
+    if (/^[a-zA-Z]\d{4,}$/.test(trimmed)) return false;
+    const letterCount = (trimmed.match(/[a-zA-Z]/g) || []).length;
+    if (letterCount / trimmed.length < 0.3) return false;
+    return true;
+  });
+
+  return cleaned
+    .join("\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // ── Text extractors (server-side only) ────────────────────────────────────────
 
 async function extractPdf(buffer: Buffer): Promise<string> {
@@ -68,8 +105,8 @@ export async function POST(req: NextRequest) {
       rawText = extractText(buffer);
     }
 
-    // Clean up: collapse excessive whitespace
-    rawText = rawText.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    // Clean: remove junk, keep only English + numbers + basic punctuation
+    rawText = cleanExtractedText(rawText);
 
     // Truncate to MAX_CHARS to stay within metadata limits
     let content = rawText;

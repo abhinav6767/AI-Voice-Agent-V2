@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Upload, FileText, Users, Play, Download, CheckCircle2, XCircle,
   Loader2, ChevronRight, ChevronLeft, Building, Mail, Phone,
-  AlertCircle, RefreshCw, Trash2, Plus, X,
+  AlertCircle, RefreshCw, Trash2, Plus, X, Globe,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -35,6 +35,7 @@ interface CampaignResult {
   email_status?: string;
   interested_projects?: string[];
   brochure_sent?: string;
+  property_requirements?: { budget?: string; location?: string; property_type?: string; bedrooms?: string };
   timestamp: string;
 }
 
@@ -130,6 +131,24 @@ function EmailBadge({ status }: { status: string }) {
   );
 }
 
+function SentimentBadge({ sentiment }: { sentiment: string }) {
+  const map: Record<string, { color: string; bg: string; icon: string }> = {
+    positive: { color: "#3fb950", bg: "rgba(63,185,80,0.15)", icon: "😊" },
+    neutral: { color: "#d29922", bg: "rgba(210,153,34,0.15)", icon: "😐" },
+    negative: { color: "#f85149", bg: "rgba(248,81,73,0.15)", icon: "😞" },
+  };
+  const key = sentiment?.toLowerCase() || "neutral";
+  const s = map[key] || map.neutral;
+  return (
+    <span
+      style={{ color: s.color, backgroundColor: s.bg }}
+      className="px-2 py-0.5 rounded-full text-xs font-medium inline-flex items-center gap-1"
+    >
+      <span>{s.icon}</span> {sentiment || "—"}
+    </span>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function RealEstatePage() {
@@ -140,7 +159,54 @@ export default function RealEstatePage() {
   const [brochures, setBrochures] = useState<BrochureData[]>([]);
   const [uploadingBrochures, setUploadingBrochures] = useState(false);
   const brochureFileRef = useRef<HTMLInputElement>(null);
-  const [customPrompt, setCustomPrompt] = useState("");
+  const [customPrompt, setCustomPrompt] = useState(`You are Priya, a friendly real estate consultant. You are calling to discuss property needs and help find the perfect home.
+
+## YOUR OBJECTIVE
+1. Introduce yourself and the company warmly
+2. Profile the client: collect budget range, preferred location, property type, bedrooms
+3. Based on their needs, recommend the most suitable project from our portfolio
+4. Offer to send them the brochure for that project via email
+5. If they are interested, confirm their email address and send the brochure
+
+## CONVERSATION FLOW
+- Greet them by name and introduce yourself
+- Ask about their current living situation and what they are looking for
+- Ask about their budget (use ranges like "fifty to eighty lakhs" not numbers)
+- Ask about their preferred location/area
+- Ask about property type: apartment, independent house, villa, plot
+- Recommend 1-2 projects that match their needs
+- Tell them key highlights of the recommended project(s)
+- Ask if they would like to receive the brochure via email
+- If yes, use the send_brochure tool to email it to them
+- Thank them and offer to have a sales representative follow up
+
+## CLIENT PROFILING QUESTIONS (ask naturally, not as a checklist)
+- "Aap abhi kahan reh rahe hain?" / "Where are you currently staying?"
+- "Aap kitne budget mein dekh rahe hain?" / "What is your budget range?"
+- "Kis area mein aapko ghar chahiye?" / "Which area are you looking at?"
+- "Aapko kya chahiye -- flat, independent house, ya villa?" / "What type of property?"
+- "Kitne bedrooms chahiye?" / "How many bedrooms do you need?"
+
+## TOOL USAGE
+- Use the send_brochure tool when the client agrees to receive a brochure
+- Pass the exact project_name from the catalog above and the client's email
+- Only send ONE brochure -- the project that best matches their stated needs
+- If they want multiple, offer to send the best match now and have sales follow up with others
+
+## RULES
+- Speak naturally, like a real estate consultant on a phone call
+- Keep responses to 1-2 sentences at a time
+- Match the client's language (Hindi, English, or Hinglish)
+- Never invent project details -- only use information from the brochure catalog
+- Always confirm the email address before sending
+- If the client is not interested, thank them politely and end the call gracefully`);
+
+  // Step 1: RAG / Knowledge Base
+  const [ragUrls, setRagUrls] = useState<{ url: string; content: string }[]>([]);
+  const [ragFiles, setRagFiles] = useState<{ name: string; content: string }[]>([]);
+  const [ragUploading, setRagUploading] = useState(false);
+  const [ragUrlInput, setRagUrlInput] = useState("");
+  const ragFileRef = useRef<HTMLInputElement>(null);
 
   // Step 2: Leads
   const [leads, setLeads] = useState<LeadRow[]>([]);
@@ -168,7 +234,7 @@ export default function RealEstatePage() {
   // Email config
   const [emailSubject, setEmailSubject] = useState("{{project.name}} — Project Brochure");
   const [emailBody, setEmailBody] = useState(
-    `Dear {{lead.name}},\n\nThank you for your interest in {{project.name}}!\n\nPlease find the project details below:\n\n{{project.content}}\n\nOur sales team will reach out to you shortly for any further assistance.\n\nBest Regards,\n{{sender.name}}`
+    `Dear {{lead.name}},\n\nThank you for your interest in {{project.name}}!\n\n{{project.description}}\n\nOur sales team will reach out to you shortly for any further assistance.\n\nBest Regards,\n{{sender.name}}`
   );
   const [senderName, setSenderName] = useState("Sales Team");
   const [gmailEmail, setGmailEmail] = useState("");
@@ -190,6 +256,228 @@ export default function RealEstatePage() {
 
   // Step 4: Results
   const [downloadReady, setDownloadReady] = useState(false);
+
+  // Step 5: CRM
+  interface CrmLead {
+    id: string;
+    first_name: string;
+    last_name: string;
+    phone: string;
+    status: string;
+    custom_fields: Record<string, any>;
+    created_at: string;
+    updated_at: string;
+  }
+  const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
+  const [crmSearch, setCrmSearch] = useState("");
+  const [crmStatusFilter, setCrmStatusFilter] = useState("");
+  const [crmLoading, setCrmLoading] = useState(false);
+  const [selectedCrmLead, setSelectedCrmLead] = useState<CrmLead | null>(null);
+
+  const fetchCrmLeads = async (search?: string, status?: string) => {
+    setCrmLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (status) params.set("status", status);
+      const res = await fetch(`/api/real-estate/crm-leads?${params}`);
+      const data = await res.json();
+      setCrmLeads(data.leads || []);
+    } catch (err) {
+      console.error("Failed to fetch CRM leads:", err);
+    } finally {
+      setCrmLoading(false);
+    }
+  };
+
+  // ── Config Persistence ────────────────────────────────────────────────────
+  const CONFIG_STORAGE_KEY = "re_campaign_configs";
+  const [configName, setConfigName] = useState("");
+  const [savedConfigs, setSavedConfigs] = useState<Record<string, any>>({});
+  const [showSaveInput, setShowSaveInput] = useState(false);
+  const [newConfigName, setNewConfigName] = useState("");
+
+  const loadConfigsFromStorage = (): Record<string, any> => {
+    try {
+      const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  };
+
+  const persistConfigs = (configs: Record<string, any>) => {
+    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(configs));
+    setSavedConfigs(configs);
+  };
+
+  const saveCurrentConfig = (name: string) => {
+    const config = {
+      brochures,
+      customPrompt,
+      ragUrls,
+      ragFiles,
+      leads,
+      leadColumns,
+      phoneColumn,
+      nameColumn,
+      emailColumn,
+      llmProvider, llmModel,
+      ttsProvider, ttsVoice, ttsLanguage,
+      emailSubject, emailBody, senderName,
+      savedAt: new Date().toISOString(),
+    };
+    const updated = { ...savedConfigs, [name]: config };
+    persistConfigs(updated);
+    setConfigName(name);
+    setShowSaveInput(false);
+    setNewConfigName("");
+  };
+
+  const loadConfig = (name: string) => {
+    const config = savedConfigs[name];
+    if (!config) return;
+    setBrochures(config.brochures || []);
+    setCustomPrompt(config.customPrompt || "");
+    setRagUrls(config.ragUrls || []);
+    setRagFiles(config.ragFiles || []);
+    setLeads(config.leads || []);
+    setLeadColumns(config.leadColumns || []);
+    setPhoneColumn(config.phoneColumn || "");
+    setNameColumn(config.nameColumn || "");
+    setEmailColumn(config.emailColumn || "");
+    setLlmProvider(config.llmProvider || "groq");
+    setLlmModel(config.llmModel || "llama-3.3-70b-versatile");
+    setTtsProvider(config.ttsProvider || "sarvam");
+    setTtsVoice(config.ttsVoice || "priya");
+    setTtsLanguage(config.ttsLanguage || "hi-IN");
+    setEmailSubject(config.emailSubject || "{{project.name}} — Project Brochure");
+    setEmailBody(config.emailBody || "");
+    setSenderName(config.senderName || "Sales Team");
+    setConfigName(name);
+  };
+
+  const deleteConfig = (name: string) => {
+    const updated = { ...savedConfigs };
+    delete updated[name];
+    persistConfigs(updated);
+    if (configName === name) setConfigName("");
+  };
+
+  // Preset config for quick start
+  const SATYA_HOMES_PRESET = {
+    brochures: [
+      {
+        name: "Satya Helios",
+        fileName: "satya-helios.pdf",
+        content: "Satya Helios is a premium residential project located in Sector 150, Noida. The project offers 2 BHK and 3 BHK apartments with modern amenities. Price ranges from 55 Lakh to 90 Lakh. The project features a swimming pool, clubhouse, gymnasium, 24/7 security, and landscaped gardens. Possession expected by December 2027. RERA registered. Best suited for young professionals and families.",
+        charCount: 450,
+        description: "2BHK & 3BHK apartments in Sector 150, Noida. Price 55L - 90L. Ready by Dec 2027. Pool, clubhouse, gym, 24/7 security. Best for young professionals and families. RERA registered.",
+        truncated: false,
+      },
+      {
+        name: "Satya Orante",
+        fileName: "satya-orante.pdf",
+        content: "Satya Orante is a luxury villa project located in Sector 150, Noida. The project offers 3 BHK and 4 BHK independent villas with private gardens. Price ranges from 1.2 Cr to 2.5 Cr. The project features a private swimming pool, clubhouse, gymnasium, 24/7 security, and jogging track. Possession expected by June 2028. RERA registered. Best suited for high-net-worth families.",
+        charCount: 480,
+        description: "3BHK & 4BHK villas in Sector 150, Noida. Price 1.2Cr - 2.5Cr. Ready by Jun 2028. Private pool, clubhouse, gym, 24/7 security, jogging track. Best for HNIs. RERA registered.",
+        truncated: false,
+      },
+      {
+        name: "Satya Uptown",
+        fileName: "satya-uptown.pdf",
+        content: "Satya Uptown is an affordable housing project located in Sector 150, Noida. The project offers 1 BHK and 2 BHK apartments with smart home features. Price ranges from 35 Lakh to 55 Lakh. The project features a community hall, garden, 24/7 security, and kids play area. Possession expected by March 2027. PMAY eligible. Best suited for first-time homebuyers and young families.",
+        charCount: 460,
+        description: "1BHK & 2BHK apartments in Sector 150, Noida. Price 35L - 55L. Ready by Mar 2027. Community hall, garden, 24/7 security, kids play area. PMAY eligible. Best for first-time homebuyers.",
+        truncated: false,
+      },
+    ],
+    customPrompt: `You are Priya, a friendly real estate consultant from Satya Group. You are calling to discuss property needs and help find the perfect home.
+
+## YOUR OBJECTIVE
+1. Introduce yourself and Satya Group warmly
+2. Profile the client: collect budget range, preferred location, property type, bedrooms
+3. Based on their needs, recommend the most suitable project from our portfolio
+4. Offer to send them the brochure for that project via email
+5. If they are interested, confirm their email address and send the brochure
+
+## CONVERSATION FLOW
+- Greet them by name and introduce yourself as a Satya Group representative
+- Ask about their current living situation and what they are looking for
+- Ask about their budget (use ranges like "fifty to eighty lakhs" not numbers)
+- Ask about their preferred location/area
+- Ask about property type: apartment, independent house, villa, plot
+- Recommend 1-2 projects that match their needs
+- Tell them key highlights of the recommended project(s)
+- Ask if they would like to receive the brochure via email
+- If yes, use the send_brochure tool to email it to them
+- Thank them and offer to have a sales representative follow up
+
+## CLIENT PROFILING QUESTIONS (ask naturally, not as a checklist)
+- "Aap abhi kahan reh rahe hain?" / "Where are you currently staying?"
+- "Aap kitne budget mein dekh rahe hain?" / "What is your budget range?"
+- "Kis area mein aapko ghar chahiye?" / "Which area are you looking at?"
+- "Aapko kya chahiye -- flat, independent house, ya villa?" / "What type of property?"
+- "Kitne bedrooms chahiye?" / "How many bedrooms do you need?"
+
+## TOOL USAGE
+- Use the send_brochure tool when the client agrees to receive a brochure
+- Pass the exact project_name from the catalog above and the client's email
+- Only send ONE brochure -- the project that best matches their stated needs
+- If they want multiple, offer to send the best match now and have sales follow up with others
+
+## RULES
+- Speak naturally, like a real estate consultant on a phone call
+- Keep responses to 1-2 sentences at a time
+- Match the client's language (Hindi, English, or Hinglish)
+- Never invent project details -- only use information from the brochure catalog
+- Always confirm the email address before sending
+- If the client is not interested, thank them politely and end the call gracefully`,
+    ragUrls: [],
+    ragFiles: [
+      {
+        name: "Satya Group FAQ.txt",
+        content: "Satya Group is a leading real estate developer in Noida, established in 2005. We have delivered 15+ projects on time with RERA certification. Our projects are located in Sector 150, Noida — one of the fastest-growing areas in NCR. We offer flexible payment plans: construction-linked and possession-linked. Home loan partners: SBI, HDFC, ICICI, Axis Bank. We do NOT charge any hidden fees — all-inclusive pricing. Our USP: RERA certified, on-time delivery, premium construction quality, and transparent dealings. For any queries, call us at +91 120 4567 890 or email sales@satyagroup.com.",
+      },
+    ],
+    llmProvider: "groq",
+    llmModel: "llama-3.3-70b-versatile",
+    ttsProvider: "sarvam",
+    ttsVoice: "priya",
+    ttsLanguage: "hi-IN",
+    emailSubject: "{{project.name}} — Satya Group Brochure",
+    emailBody: `Dear {{lead.name}},
+
+Thank you for your interest in {{project.name}}!
+
+{{project.description}}
+
+Our sales team will reach out to you shortly for any further assistance.
+
+Best Regards,
+{{sender.name}}`,
+    senderName: "Satya Group Sales Team",
+    savedAt: new Date().toISOString(),
+  };
+
+  // Auto-load most recent config on mount
+  useEffect(() => {
+    const configs = loadConfigsFromStorage();
+    setSavedConfigs(configs);
+    const names = Object.keys(configs);
+    if (names.length > 0) {
+      // Load the most recently saved config
+      const latest = names.reduce((a, b) =>
+        (configs[a].savedAt || "") > (configs[b].savedAt || "") ? a : b
+      );
+      loadConfig(latest);
+    } else {
+      // No saved configs — create Satya Homes preset as default
+      const preset = { ...SATYA_HOMES_PRESET };
+      const updated = { "Satya Homes": preset };
+      persistConfigs(updated);
+      loadConfig("Satya Homes");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Step 1: Brochure Upload ───────────────────────────────────────────────
 
@@ -247,6 +535,105 @@ export default function RealEstatePage() {
     setBrochures((prev) => prev.filter((_, i) => i !== index));
   };
 
+  // ── Step 1: RAG / Knowledge Base ─────────────────────────────────────────
+
+  const handleAddUrl = async () => {
+    const url = ragUrlInput.trim();
+    if (!url) return;
+
+    // Check for duplicates
+    if (ragUrls.some((r) => r.url === url)) {
+      alert("This URL is already added.");
+      return;
+    }
+
+    setRagUploading(true);
+    try {
+      const res = await fetch("/api/real-estate/scrape-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(`Failed to fetch URL: ${data.error}`);
+        return;
+      }
+      setRagUrls((prev) => [...prev, { url: data.url, content: data.content }]);
+      setRagUrlInput("");
+    } catch (err: any) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setRagUploading(false);
+    }
+  };
+
+  const handleRagFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setRagUploading(true);
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        // Check for duplicates by name
+        if (ragFiles.some((f) => f.name === file.name)) continue;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const res = await fetch("/api/campaign/upload-rag", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.error) {
+          alert(`Failed to process ${file.name}: ${data.error}`);
+          continue;
+        }
+        setRagFiles((prev) => [...prev, { name: data.fileName, content: data.content }]);
+      }
+    } catch (err: any) {
+      alert(`Upload error: ${err.message}`);
+    } finally {
+      setRagUploading(false);
+      if (ragFileRef.current) ragFileRef.current.value = "";
+    }
+  };
+
+  const removeRagUrl = (index: number) => {
+    setRagUrls((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const removeRagFile = (index: number) => {
+    setRagFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ── RAG: inject raw cleaned text from files ─────────────────────────────
+  const MAX_RAG_CHARS = 6000;
+
+  const buildRagContent = useCallback(() => {
+    const parts: string[] = [];
+    let totalLen = 0;
+    const budget = Math.floor(MAX_RAG_CHARS / Math.max(1, ragUrls.length + ragFiles.length));
+
+    for (const item of ragUrls) {
+      const hostname = (() => { try { return new URL(item.url).hostname; } catch { return item.url; } })();
+      const content = item.content.substring(0, budget).trim();
+      if (content) {
+        parts.push(`### From: ${hostname}\n${content}`);
+        totalLen += content.length;
+      }
+    }
+    for (const item of ragFiles) {
+      const content = item.content.substring(0, budget).trim();
+      if (content) {
+        parts.push(`### From: ${item.name}\n${content}`);
+        totalLen += content.length;
+      }
+    }
+    return parts.join("\n\n");
+  }, [ragUrls, ragFiles]);
+
   // ── Step 2: Leads Upload ──────────────────────────────────────────────────
 
   const handleLeadsUpload = async (files: FileList | null) => {
@@ -288,70 +675,39 @@ export default function RealEstatePage() {
   // ── Step 3: Campaign Execution ────────────────────────────────────────────
 
   const buildSystemPrompt = useCallback(() => {
-    const brochureCatalog = brochures
-      .map(
-        (b) =>
-          `### Project: ${b.name}${b.description ? `\n**Key Info:** ${b.description}` : ""}\n${b.content.substring(0, 800)}`
-      )
-      .join("\n\n");
+    let prompt = customPrompt.trim();
 
-    // If user provided a custom prompt, use it as-is (with brochure catalog injected)
-    if (customPrompt.trim()) {
-      return `${customPrompt.trim()}
+    // Inject brochure info: name + description only (what the user typed)
+    if (brochures.length > 0) {
+      const brochureSection = brochures.map((b) => {
+        const parts = [`### ${b.name}`];
+        if (b.description?.trim()) parts.push(b.description.trim());
+        return parts.join("\n");
+      }).join("\n\n");
 
-## BROCHURE CATALOG
-${brochureCatalog}`;
+      prompt += `\n\n## PROJECT CATALOG\nThese are the available projects. Use only the information below.\n\n${brochureSection}`;
     }
 
-    // Default prompt
-    return `You are Priya, a friendly real estate consultant. You are calling to discuss property needs and help find the perfect home.
+    // Inject RAG knowledge base: full extracted text from files
+    const ragContent = buildRagContent();
+    if (ragContent.trim()) {
+      prompt += `\n\n## KNOWLEDGE BASE\nUse the following documents to answer client questions. Only reference what is explicitly mentioned in these documents.\n\n${ragContent}`;
+    }
 
-## YOUR OBJECTIVE
-1. Introduce yourself and the company warmly
-2. Profile the client: collect budget range, preferred location, property type, bedrooms
-3. Based on their needs, recommend the most suitable project from our portfolio
-4. Offer to send them the brochure for that project via email
-5. If they are interested, confirm their email address and send the brochure
-
-## CONVERSATION FLOW
-- Greet them by name and introduce yourself
-- Ask about their current living situation and what they are looking for
-- Ask about their budget (use ranges like "fifty to eighty lakhs" not numbers)
-- Ask about their preferred location/area
-- Ask about property type: apartment, independent house, villa, plot
-- Recommend 1-2 projects that match their needs
-- Tell them key highlights of the recommended project(s)
-- Ask if they would like to receive the brochure via email
-- If yes, use the send_brochure tool to email it to them
-- Thank them and offer to have a sales representative follow up
-
-## CLIENT PROFILING QUESTIONS (ask naturally, not as a checklist)
-- "Aap abhi kahan reh rahe hain?" / "Where are you currently staying?"
-- "Aap kitne budget mein dekh rahe hain?" / "What is your budget range?"
-- "Kis area mein aapko ghar chahiye?" / "Which area are you looking at?"
-- "Aapko kya chahiye -- flat, independent house, ya villa?" / "What type of property?"
-- "Kitne bedrooms chahiye?" / "How many bedrooms do you need?"
-
-## BROCHURE CATALOG
-${brochureCatalog}
-
-## TOOL USAGE
-- Use the send_brochure tool when the client agrees to receive a brochure
-- Pass the exact project_name from the catalog above and the client's email
-- Only send ONE brochure -- the project that best matches their stated needs
-- If they want multiple, offer to send the best match now and have sales follow up with others
-
-## RULES
-- Speak naturally, like a real estate consultant on a phone call
-- Keep responses to 1-2 sentences at a time
-- Match the client's language (Hindi, English, or Hinglish)
-- Never invent project details -- only use information from the brochure catalog
-- Always confirm the email address before sending
-- If the client is not interested, thank them politely and end the call gracefully`;
-  }, [brochures, customPrompt]);
+    return prompt;
+  }, [brochures, customPrompt, buildRagContent]);
 
   const startCampaign = async () => {
     if (validLeads.length === 0 || brochures.length === 0) return;
+
+    // Warn if brochure descriptions are empty — agent will have no project data
+    const emptyDescs = brochures.filter((b) => !b.description?.trim());
+    if (emptyDescs.length > 0) {
+      const names = emptyDescs.map((b) => b.name).join(", ");
+      if (!confirm(`Warning: ${names} ${emptyDescs.length === 1 ? "has" : "have"} no description filled in. The AI agent needs project descriptions to recommend projects correctly. Without descriptions, it may make up fake project details.\n\nContinue anyway?`)) {
+        return;
+      }
+    }
 
     cancelRef.current = false;
     setCancelled(false);
@@ -379,6 +735,7 @@ ${brochureCatalog}
             body: emailBody,
             senderName,
           },
+          ragContent: buildRagContent(),
         }),
       });
       const initData = await initRes.json();
@@ -386,6 +743,36 @@ ${brochureCatalog}
       setCampaignId(campId);
 
       const systemPrompt = buildSystemPrompt();
+
+      // ── Detailed campaign start log ──────────────────────────────────────
+      console.log("═══════════════════════════════════════════════════════════");
+      console.log("[Campaign] STARTING CAMPAIGN");
+      console.log("═══════════════════════════════════════════════════════════");
+      console.log(`[Campaign] Total system prompt: ${systemPrompt.length} chars`);
+      console.log("");
+      console.log("[Campaign] ── BROCHURES ──");
+      brochures.forEach((b, i) => {
+        console.log(`  ${i + 1}. ${b.name}`);
+        console.log(`     File: ${b.fileName}`);
+        console.log(`     Description: ${b.description || "(EMPTY)"}`);
+        console.log(`     Content length: ${b.content.length} chars`);
+      });
+      console.log("");
+      console.log("[Campaign] ── RAG / KNOWLEDGE BASE ──");
+      ragUrls.forEach((r, i) => {
+        const hostname = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
+        console.log(`  URL ${i + 1}: ${r.url} (${r.content.length} chars)`);
+      });
+      ragFiles.forEach((r, i) => {
+        console.log(`  File ${i + 1}: ${r.name} (${r.content.length} chars)`);
+      });
+      if (ragUrls.length === 0 && ragFiles.length === 0) {
+        console.log("  (none added)");
+      }
+      console.log("");
+      console.log("[Campaign] ── FULL SYSTEM PROMPT ──");
+      console.log(systemPrompt);
+      console.log("═══════════════════════════════════════════════════════════");
 
       // Loop through leads sequentially
       for (let i = 0; i < validLeads.length; i++) {
@@ -413,7 +800,14 @@ ${brochureCatalog}
               campaignId: campId,
               leadRowIndex: leads.indexOf(lead),
               overrideSystemPrompt: true,
-              initialGreeting: `Namaste ${name || ""} ji! Main Priya bol rahi hoon. Kya aapka ek minute ho sakta hai? Maine aapse property ke baare mein baat karni thi.`,
+              initialGreeting: (() => {
+                // Extract agent name from system prompt (e.g. "You are Aman Sharma" → "Aman")
+                const nameMatch = systemPrompt.match(/you are\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+                const agentName = nameMatch ? nameMatch[1].split(" ")[0] : "Agent";
+                const isFemale = /\b(she|her|priya|isha|neha|ria|priyanka)\b/i.test(systemPrompt);
+                const verb = isFemale ? "bol rahi hoon" : "bol raha hoon";
+                return `Namaste ${name || ""} ji! Main ${agentName} ${verb}. Kya aapka ek minute ho sakta hai? Maine aapse property ke baare mein baat karni thi.`;
+              })(),
               // Voice / LLM config
               modelProvider: llmProvider,
               ttsProvider: ttsProvider,
@@ -445,6 +839,29 @@ ${brochureCatalog}
                 const filtered = prev.filter((r) => r.row_index !== myResult.row_index);
                 return [...filtered, myResult];
               });
+
+              // Sync to CRM
+              fetch("/api/real-estate/crm-sync", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  results: [{
+                    phone_number: phone,
+                    lead_name: name,
+                    lead_email: email,
+                    lead_data: lead,
+                    status: myResult.status,
+                    remarks: myResult.remarks,
+                    sentiment: myResult.sentiment,
+                    intent: myResult.intent,
+                    interested_projects: myResult.interested_projects,
+                    brochure_sent: myResult.brochure_sent,
+                    property_requirements: myResult.property_requirements,
+                    campaign_id: campId,
+                  }],
+                }),
+              }).catch((err) => console.error("CRM sync failed:", err));
+
               break;
             }
           } catch {
@@ -501,6 +918,9 @@ ${brochureCatalog}
   const resetAll = () => {
     setStep(1);
     setBrochures([]);
+    setRagUrls([]);
+    setRagFiles([]);
+    setRagUrlInput("");
     setLeads([]);
     setLeadColumns([]);
     setPhoneColumn("");
@@ -512,6 +932,7 @@ ${brochureCatalog}
     setResults([]);
     setCancelled(false);
     setDownloadReady(false);
+    setConfigName("");
   };
 
   // ── Stats ─────────────────────────────────────────────────────────────────
@@ -534,6 +955,7 @@ ${brochureCatalog}
     { num: 2, label: "Leads", icon: Users },
     { num: 3, label: "Campaign", icon: Phone },
     { num: 4, label: "Results", icon: Download },
+    { num: 5, label: "CRM", icon: Users },
   ];
 
   return (
@@ -545,11 +967,83 @@ ${brochureCatalog}
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
               <Building className="w-5 h-5 text-white" />
             </div>
-            <div>
+            <div className="flex-1">
               <h1 className="text-xl font-bold">Real Estate AI Calling Agent</h1>
               <p className="text-sm text-[#8b949e]">
                 Upload brochures & leads — AI calls, profiles, and sends brochures
               </p>
+            </div>
+
+            {/* Config Manager */}
+            <div className="flex items-center gap-2">
+              {configName && (
+                <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded-lg border border-emerald-400/20">
+                  {configName}
+                </span>
+              )}
+              {Object.keys(savedConfigs).length > 0 && (
+                <select
+                  value={configName}
+                  onChange={(e) => {
+                    if (e.target.value) loadConfig(e.target.value);
+                  }}
+                  className="bg-[#0d1117] border border-[#30363d] rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-500 max-w-[160px]"
+                >
+                  <option value="">Load config...</option>
+                  {Object.keys(savedConfigs)
+                    .sort((a, b) => (savedConfigs[b].savedAt || "").localeCompare(savedConfigs[a].savedAt || ""))
+                    .map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                </select>
+              )}
+              {showSaveInput ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={newConfigName}
+                    onChange={(e) => setNewConfigName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newConfigName.trim()) saveCurrentConfig(newConfigName.trim());
+                      if (e.key === "Escape") setShowSaveInput(false);
+                    }}
+                    className="bg-[#0d1117] border border-[#30363d] rounded-lg px-2 py-1.5 text-xs outline-none focus:border-emerald-500 w-32"
+                    placeholder="Config name..."
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => newConfigName.trim() && saveCurrentConfig(newConfigName.trim())}
+                    className="text-xs px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setShowSaveInput(false)}
+                    className="text-xs px-1.5 py-1.5 rounded-lg text-[#8b949e] hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setShowSaveInput(true); setNewConfigName(configName || ""); }}
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-[#30363d] text-[#8b949e] hover:text-emerald-400 hover:border-emerald-500/50 transition-all flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  Save Config
+                </button>
+              )}
+              {configName && savedConfigs[configName] && (
+                <button
+                  onClick={() => {
+                    if (confirm(`Delete config "${configName}"?`)) deleteConfig(configName);
+                  }}
+                  className="text-xs px-2 py-1.5 rounded-lg text-[#8b949e] hover:text-red-400 transition-colors"
+                  title="Delete config"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -698,17 +1192,55 @@ ${brochureCatalog}
                 <div>
                   <h3 className="text-sm font-semibold">System Prompt</h3>
                   <p className="text-xs text-[#8b949e]">
-                    Optional — override the default AI agent prompt. Brochure catalog is always injected automatically.
+                    Edit the AI agent's prompt. Brochure catalog is always appended automatically.
                   </p>
                 </div>
-                {customPrompt && (
-                  <button
-                    onClick={() => setCustomPrompt("")}
-                    className="text-xs text-[#8b949e] hover:text-red-400 transition-colors"
-                  >
-                    Reset to default
-                  </button>
-                )}
+                <button
+                  onClick={() => setCustomPrompt(`You are Priya, a friendly real estate consultant. You are calling to discuss property needs and help find the perfect home.
+
+## YOUR OBJECTIVE
+1. Introduce yourself and the company warmly
+2. Profile the client: collect budget range, preferred location, property type, bedrooms
+3. Based on their needs, recommend the most suitable project from our portfolio
+4. Offer to send them the brochure for that project via email
+5. If they are interested, confirm their email address and send the brochure
+
+## CONVERSATION FLOW
+- Greet them by name and introduce yourself
+- Ask about their current living situation and what they are looking for
+- Ask about their budget (use ranges like "fifty to eighty lakhs" not numbers)
+- Ask about their preferred location/area
+- Ask about property type: apartment, independent house, villa, plot
+- Recommend 1-2 projects that match their needs
+- Tell them key highlights of the recommended project(s)
+- Ask if they would like to receive the brochure via email
+- If yes, use the send_brochure tool to email it to them
+- Thank them and offer to have a sales representative follow up
+
+## CLIENT PROFILING QUESTIONS (ask naturally, not as a checklist)
+- "Aap abhi kahan reh rahe hain?" / "Where are you currently staying?"
+- "Aap kitne budget mein dekh rahe hain?" / "What is your budget range?"
+- "Kis area mein aapko ghar chahiye?" / "Which area are you looking at?"
+- "Aapko kya chahiye -- flat, independent house, ya villa?" / "What type of property?"
+- "Kitne bedrooms chahiye?" / "How many bedrooms do you need?"
+
+## TOOL USAGE
+- Use the send_brochure tool when the client agrees to receive a brochure
+- Pass the exact project_name from the catalog above and the client's email
+- Only send ONE brochure -- the project that best matches their stated needs
+- If they want multiple, offer to send the best match now and have sales follow up with others
+
+## RULES
+- Speak naturally, like a real estate consultant on a phone call
+- Keep responses to 1-2 sentences at a time
+- Match the client's language (Hindi, English, or Hinglish)
+- Never invent project details -- only use information from the brochure catalog
+- Always confirm the email address before sending
+- If the client is not interested, thank them politely and end the call gracefully`)}
+                  className="text-xs text-[#8b949e] hover:text-emerald-400 transition-colors"
+                >
+                  Reset to default
+                </button>
               </div>
               <textarea
                 value={customPrompt}
@@ -716,16 +1248,136 @@ ${brochureCatalog}
                 disabled={isRunning}
                 className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-500 resize-none font-mono disabled:opacity-60"
                 rows={8}
-                placeholder="Leave empty to use the default real estate agent prompt. Or write your own instructions for the AI agent..."
+                placeholder="Type your AI agent prompt here..."
               />
               <div className="flex items-center gap-4 mt-2">
                 <span className="text-xs text-[#8b949e]">
-                  {customPrompt ? `${customPrompt.length} chars` : "Using default prompt"}
+                  {customPrompt.length} chars
                 </span>
                 <span className="text-xs text-[#8b949e]">
                   Brochure catalog with {brochures.length} project(s) will be appended automatically
                 </span>
               </div>
+            </div>
+
+            {/* ── Knowledge Base / RAG ──────────────────────────────────────── */}
+            <div className="p-4 rounded-xl bg-[#161b22] border border-[#30363d]">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <Building className="w-4 h-4 text-blue-400" />
+                    Additional Knowledge Base
+                  </h3>
+                  <p className="text-xs text-[#8b949e]">
+                    Add your company website or reference documents for the AI agent to use during calls.
+                  </p>
+                </div>
+                {(ragUrls.length > 0 || ragFiles.length > 0) && !isRunning && (
+                  <button
+                    onClick={() => { setRagUrls([]); setRagFiles([]); }}
+                    className="text-xs text-[#8b949e] hover:text-red-400 transition-colors flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Clear All
+                  </button>
+                )}
+              </div>
+
+              {/* URL input */}
+              <div className="flex gap-2 mb-3">
+                <input
+                  type="url"
+                  value={ragUrlInput}
+                  onChange={(e) => setRagUrlInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddUrl()}
+                  disabled={isRunning || ragUploading}
+                  className="flex-1 bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-60"
+                  placeholder="https://yourcompany.com/about"
+                />
+                <button
+                  onClick={handleAddUrl}
+                  disabled={isRunning || ragUploading || !ragUrlInput.trim()}
+                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium transition-all flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add URL
+                </button>
+              </div>
+
+              {/* File upload */}
+              <div
+                onClick={() => !isRunning && !ragUploading && ragFileRef.current?.click()}
+                className={`border border-dashed rounded-lg p-4 text-center transition-all mb-3 ${
+                  isRunning
+                    ? "border-[#30363d] cursor-not-allowed opacity-60"
+                    : "border-[#30363d] hover:border-blue-500/50 cursor-pointer"
+                }`}
+              >
+                {ragUploading ? (
+                  <Loader2 className="w-5 h-5 text-blue-400 mx-auto animate-spin" />
+                ) : (
+                  <p className="text-xs text-[#8b949e]">
+                    Click to upload PDF, DOCX, TXT, or CSV files
+                  </p>
+                )}
+                <input
+                  ref={ragFileRef}
+                  type="file"
+                  accept=".pdf,.docx,.doc,.txt,.csv,.md"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => handleRagFileUpload(e.target.files)}
+                />
+              </div>
+
+              {/* Added items list */}
+              {(ragUrls.length > 0 || ragFiles.length > 0) && (
+                <div className="space-y-2">
+                  {ragUrls.map((item, i) => (
+                    <div
+                      key={`url-${i}`}
+                      className="flex items-center gap-2 p-2 rounded-lg bg-[#0d1117] border border-[#30363d] group"
+                    >
+                      <Globe className="w-4 h-4 text-blue-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-[#e6edf3] truncate">{item.url}</p>
+                        <p className="text-[10px] text-[#8b949e]">{item.content.length.toLocaleString()} chars extracted</p>
+                      </div>
+                      {!isRunning && (
+                        <button
+                          onClick={() => removeRagUrl(i)}
+                          className="text-[#8b949e] hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {ragFiles.map((item, i) => (
+                    <div
+                      key={`file-${i}`}
+                      className="flex items-center gap-2 p-2 rounded-lg bg-[#0d1117] border border-[#30363d] group"
+                    >
+                      <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-[#e6edf3] truncate">{item.name}</p>
+                        <p className="text-[10px] text-[#8b949e]">{item.content.length.toLocaleString()} chars extracted</p>
+                      </div>
+                      {!isRunning && (
+                        <button
+                          onClick={() => removeRagFile(i)}
+                          className="text-[#8b949e] hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <p className="text-[10px] text-[#8b949e]">
+                    {(ragUrls.length + ragFiles.length)} source(s) — {(ragUrls.reduce((s, r) => s + r.content.length, 0) + ragFiles.reduce((s, r) => s + r.content.length, 0)).toLocaleString()} total chars will be appended to the prompt
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Next button */}
@@ -955,6 +1607,7 @@ ${brochureCatalog}
                       )}
                       {llmProvider === "google" && (
                         <>
+                          <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                           <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
                           <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
                         </>
@@ -1074,12 +1727,36 @@ ${brochureCatalog}
                 {gmailConnected ? (
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <div>
+                    <div className="flex-1">
                       <p className="text-xs text-emerald-400 font-medium">Gmail Connected</p>
                       <p className="text-sm text-[#e6edf3]">
                         Emails will be sent from: <strong>{gmailEmail}</strong>
                       </p>
                     </div>
+                    <button
+                      onClick={async () => {
+                        const testEmail = prompt("Send a test email to:", gmailEmail || "test@gmail.com");
+                        if (!testEmail) return;
+                        try {
+                          const res = await fetch("/api/real-estate/test-email", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ toEmail: testEmail }),
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            alert(`Test email sent successfully to ${testEmail}! Check your inbox.`);
+                          } else {
+                            alert(`Failed: ${data.error}`);
+                          }
+                        } catch (err: any) {
+                          alert(`Error: ${err.message}`);
+                        }
+                      }}
+                      className="text-xs px-3 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-all"
+                    >
+                      Send Test Email
+                    </button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
@@ -1138,12 +1815,11 @@ ${brochureCatalog}
                     </p>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {[
-                        ["{{lead.name}}", "Lead's name"],
-                        ["{{lead.email}}", "Lead's email"],
-                        ["{{lead.phone}}", "Lead's phone"],
-                        ["{{project.name}}", "Project name"],
+                        ["{{lead.name}}", "From CSV → Name column"],
+                        ["{{lead.email}}", "From CSV → Email column"],
+                        ["{{lead.phone}}", "From CSV → Phone column"],
+                        ["{{project.name}}", "Brochure name you entered"],
                         ["{{project.description}}", "Project info you wrote"],
-                        ["{{project.content}}", "Extracted PDF text"],
                         ["{{sender.name}}", "Sender name above"],
                       ].map(([varName, desc]) => (
                         <div
@@ -1159,6 +1835,25 @@ ${brochureCatalog}
                         </div>
                       ))}
                     </div>
+                    {leadColumns.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-[#30363d]">
+                        <p className="text-[10px] text-[#8b949e] mb-1">
+                          <strong>CSV column mapping:</strong>
+                        </p>
+                        <div className="flex flex-wrap gap-2 text-[10px]">
+                          <span className="text-blue-400">Name → <span className="text-[#e6edf3]">{nameColumn || "(not mapped)"}</span></span>
+                          <span className="text-blue-400">Email → <span className="text-[#e6edf3]">{emailColumn || "(not mapped)"}</span></span>
+                          <span className="text-blue-400">Phone → <span className="text-[#e6edf3]">{phoneColumn || "(not mapped)"}</span></span>
+                        </div>
+                        {leads.length > 0 && nameColumn && (
+                          <p className="text-[10px] text-[#8b949e] mt-1">
+                            Preview row: <span className="text-[#e6edf3]">{leads[0]?.[nameColumn]}</span>
+                            {emailColumn && <span> · <span className="text-[#e6edf3]">{leads[0]?.[emailColumn]}</span></span>}
+                            {phoneColumn && <span> · <span className="text-[#e6edf3]">{leads[0]?.[phoneColumn]}</span></span>}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <p className="text-xs text-[#8b949e] mt-2">
                       Click a variable to copy it. Paste it anywhere in the subject or body.
                     </p>
@@ -1173,15 +1868,21 @@ ${brochureCatalog}
                   <div
                     className="p-4 rounded-lg bg-white text-gray-900 text-sm border border-[#30363d] whitespace-pre-wrap"
                     dangerouslySetInnerHTML={{
-                      __html: emailBody
-                        .replace(/\{\{lead\.name\}\}/g, "Rahul Sharma")
-                        .replace(/\{\{lead\.email\}\}/g, "rahul@example.com")
-                        .replace(/\{\{lead\.phone\}\}/g, "+91 98765 43210")
-                        .replace(/\{\{project\.name\}\}/g, brochures[0]?.name || "Sunset Towers")
-                        .replace(/\{\{project\.description\}\}/g, brochures[0]?.description || "Premium apartments in Whitefield")
-                        .replace(/\{\{project\.content\}\}/g, (brochures[0]?.content || "Brochure content...").substring(0, 200) + "...")
-                        .replace(/\{\{sender\.name\}\}/g, senderName)
-                        .replace(/\n/g, "<br>"),
+                      __html: (() => {
+                        // Use first lead row from CSV for preview, fallback to sample data
+                        const previewLead = leads[0] || {};
+                        const previewName = (nameColumn && previewLead[nameColumn]) || "Rahul Sharma";
+                        const previewEmail = (emailColumn && previewLead[emailColumn]) || "rahul@example.com";
+                        const previewPhone = (phoneColumn && previewLead[phoneColumn]) || "+91 98765 43210";
+                        return emailBody
+                          .replace(/\{\{lead\.name\}\}/g, previewName)
+                          .replace(/\{\{lead\.email\}\}/g, previewEmail)
+                          .replace(/\{\{lead\.phone\}\}/g, previewPhone)
+                          .replace(/\{\{project\.name\}\}/g, brochures[0]?.name || "Sunset Towers")
+                          .replace(/\{\{project\.description\}\}/g, brochures[0]?.description || "Premium apartments in Whitefield")
+                          .replace(/\{\{sender\.name\}\}/g, senderName)
+                          .replace(/\n/g, "<br>");
+                      })(),
                     }}
                   />
                 </div>
@@ -1257,6 +1958,8 @@ ${brochureCatalog}
                         <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Status</th>
                         <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Email</th>
                         <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Sentiment</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Brochure</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Interested Projects</th>
                         <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Summary</th>
                       </tr>
                     </thead>
@@ -1273,7 +1976,19 @@ ${brochureCatalog}
                             <td className="px-3 py-2">
                               <EmailBadge status={r.email_status || "not_requested"} />
                             </td>
-                            <td className="px-3 py-2 text-xs">{r.sentiment || "—"}</td>
+                            <td className="px-3 py-2">
+                              <SentimentBadge sentiment={r.sentiment} />
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              {r.brochure_sent ? (
+                                <span className="text-emerald-400">{r.brochure_sent}</span>
+                              ) : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              {r.interested_projects?.length
+                                ? r.interested_projects.join(", ")
+                                : "—"}
+                            </td>
                             <td className="px-3 py-2 text-xs text-[#8b949e] max-w-xs truncate">
                               {r.remarks || "—"}
                             </td>
@@ -1350,6 +2065,7 @@ ${brochureCatalog}
                       <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Status</th>
                       <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Email Status</th>
                       <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Sentiment</th>
+                      <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Brochure Sent</th>
                       <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Interested Projects</th>
                       <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Summary</th>
                     </tr>
@@ -1364,7 +2080,12 @@ ${brochureCatalog}
                           <td className="px-3 py-2 text-xs">{r.lead_email || "—"}</td>
                           <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
                           <td className="px-3 py-2"><EmailBadge status={r.email_status || "not_requested"} /></td>
-                          <td className="px-3 py-2 text-xs">{r.sentiment || "—"}</td>
+                          <td className="px-3 py-2"><SentimentBadge sentiment={r.sentiment} /></td>
+                          <td className="px-3 py-2 text-xs">
+                            {r.brochure_sent ? (
+                              <span className="text-emerald-400 font-medium">{r.brochure_sent}</span>
+                            ) : "—"}
+                          </td>
                           <td className="px-3 py-2 text-xs">
                             {r.interested_projects?.length
                               ? r.interested_projects.join(", ")
@@ -1395,6 +2116,208 @@ ${brochureCatalog}
               >
                 <RefreshCw className="w-4 h-4" />
                 Start New Campaign
+              </button>
+              <button
+                onClick={() => { fetchCrmLeads(); setStep(5); }}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 text-sm font-medium transition-all"
+              >
+                <Users className="w-4 h-4" />
+                View in CRM
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 5: CRM ────────────────────────────────────────────────── */}
+        {step === 5 && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-lg font-semibold mb-1">CRM — Lead Database</h2>
+              <p className="text-sm text-[#8b949e]">
+                All leads from your campaigns are synced here. Search, filter, and track client interactions.
+              </p>
+            </div>
+
+            {/* Search & Filters */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  value={crmSearch}
+                  onChange={(e) => setCrmSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && fetchCrmLeads(crmSearch, crmStatusFilter)}
+                  className="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 pl-9 text-sm outline-none focus:border-emerald-500"
+                  placeholder="Search by name or phone..."
+                />
+                <Users className="w-4 h-4 text-[#8b949e] absolute left-3 top-1/2 -translate-y-1/2" />
+              </div>
+              <button
+                onClick={() => fetchCrmLeads(crmSearch, crmStatusFilter)}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-all"
+              >
+                Search
+              </button>
+              <select
+                value={crmStatusFilter}
+                onChange={(e) => {
+                  setCrmStatusFilter(e.target.value);
+                  fetchCrmLeads(crmSearch, e.target.value);
+                }}
+                className="bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-sm outline-none focus:border-emerald-500"
+              >
+                <option value="">All Statuses</option>
+                <option value="new">New</option>
+                <option value="contacted">Contacted</option>
+                <option value="interested">Interested</option>
+                <option value="converted">Converted</option>
+                <option value="not_interested">Not Interested</option>
+              </select>
+            </div>
+
+            {/* Load on mount */}
+            {crmLeads.length === 0 && !crmLoading && (
+              <div className="text-center py-8">
+                <button
+                  onClick={() => fetchCrmLeads()}
+                  className="text-sm text-emerald-400 hover:text-emerald-300 underline"
+                >
+                  Load CRM Leads
+                </button>
+                <p className="text-xs text-[#8b949e] mt-2">
+                  Click to load leads from your CRM database
+                </p>
+              </div>
+            )}
+
+            {/* Loading */}
+            {crmLoading && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
+                <span className="ml-2 text-sm text-[#8b949e]">Loading leads...</span>
+              </div>
+            )}
+
+            {/* Leads table */}
+            {crmLeads.length > 0 && (
+              <div className="rounded-xl border border-[#30363d] overflow-hidden">
+                <div className="px-4 py-2 bg-[#161b22] border-b border-[#30363d] text-xs text-[#8b949e]">
+                  {crmLeads.length} lead(s) found
+                </div>
+                <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-[#161b22]">
+                      <tr className="border-b border-[#30363d]">
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Name</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Phone</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Email</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Budget</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Location</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Property</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Interested Projects</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Last Call</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Status</th>
+                        <th className="px-3 py-2 text-left text-xs text-[#8b949e] font-medium">Sentiment</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {crmLeads.map((lead) => {
+                        const cf = lead.custom_fields || {};
+                        const fullName = [lead.first_name, lead.last_name].filter(Boolean).join(" ") || "—";
+                        return (
+                          <tr
+                            key={lead.id}
+                            className="border-b border-[#30363d]/50 hover:bg-[#161b22]/50 cursor-pointer"
+                            onClick={() => setSelectedCrmLead(selectedCrmLead?.id === lead.id ? null : lead)}
+                          >
+                            <td className="px-3 py-2 text-xs font-medium">{fullName}</td>
+                            <td className="px-3 py-2 text-xs">{lead.phone}</td>
+                            <td className="px-3 py-2 text-xs">{cf.email || "—"}</td>
+                            <td className="px-3 py-2 text-xs">{cf.budget || "—"}</td>
+                            <td className="px-3 py-2 text-xs">{cf.location || cf.city || "—"}</td>
+                            <td className="px-3 py-2 text-xs">{cf.property_type || "—"}</td>
+                            <td className="px-3 py-2 text-xs">
+                              {cf.interested_projects?.length
+                                ? cf.interested_projects.join(", ")
+                                : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-[#8b949e]">
+                              {cf.last_call_date
+                                ? new Date(cf.last_call_date).toLocaleDateString()
+                                : "—"}
+                            </td>
+                            <td className="px-3 py-2">
+                              <StatusBadge status={cf.call_status || lead.status || "new"} />
+                            </td>
+                            <td className="px-3 py-2 text-xs">{cf.last_sentiment || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Lead detail panel */}
+            {selectedCrmLead && (
+              <div className="p-5 rounded-xl bg-[#161b22] border border-[#30363d] space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold">
+                    {[selectedCrmLead.first_name, selectedCrmLead.last_name].filter(Boolean).join(" ") || "Unknown Lead"}
+                  </h3>
+                  <button
+                    onClick={() => setSelectedCrmLead(null)}
+                    className="text-[#8b949e] hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {[
+                    ["Phone", selectedCrmLead.phone],
+                    ["Email", selectedCrmLead.custom_fields?.email],
+                    ["Budget", selectedCrmLead.custom_fields?.budget],
+                    ["Location", selectedCrmLead.custom_fields?.location || selectedCrmLead.custom_fields?.city],
+                    ["Property Type", selectedCrmLead.custom_fields?.property_type],
+                    ["Bedrooms", selectedCrmLead.custom_fields?.bedrooms],
+                    ["Call Count", selectedCrmLead.custom_fields?.call_count],
+                    ["Brochure Sent", selectedCrmLead.custom_fields?.brochure_sent],
+                    ["Last Sentiment", selectedCrmLead.custom_fields?.last_sentiment],
+                    ["Last Intent", selectedCrmLead.custom_fields?.last_intent],
+                    ["Call Status", selectedCrmLead.custom_fields?.call_status],
+                    ["Source Campaign", selectedCrmLead.custom_fields?.source_campaign],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <p className="text-[10px] text-[#8b949e] uppercase">{label}</p>
+                      <p className="text-xs text-[#e6edf3]">
+                        {Array.isArray(value) ? (value.length ? value.join(", ") : "—") : (value || "—")}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {selectedCrmLead.custom_fields?.notes && (
+                  <div>
+                    <p className="text-[10px] text-[#8b949e] uppercase mb-1">Notes</p>
+                    <p className="text-xs text-[#e6edf3] bg-[#0d1117] rounded-lg p-3">
+                      {selectedCrmLead.custom_fields.notes}
+                    </p>
+                  </div>
+                )}
+                <p className="text-[10px] text-[#8b949e]">
+                  Created: {new Date(selectedCrmLead.created_at).toLocaleString()} |
+                  Updated: {new Date(selectedCrmLead.updated_at).toLocaleString()}
+                </p>
+              </div>
+            )}
+
+            {/* Navigation */}
+            <div className="flex justify-between">
+              <button
+                onClick={() => setStep(4)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-[#30363d] text-[#8b949e] hover:text-white text-sm transition-all"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Back to Results
               </button>
             </div>
           </div>

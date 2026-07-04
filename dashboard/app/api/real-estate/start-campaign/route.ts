@@ -10,7 +10,7 @@ const DATA_DIR = path.join(process.cwd(), "..", "data");
 // Returns: { campaignId }
 export async function POST(req: NextRequest) {
   try {
-    const { brochures, leadsCount, emailConfig } = await req.json();
+    const { brochures, leadsCount, emailConfig, ragContent } = await req.json();
 
     if (!brochures || !Array.isArray(brochures) || brochures.length === 0) {
       return NextResponse.json({ error: "At least one brochure is required" }, { status: 400 });
@@ -42,6 +42,7 @@ export async function POST(req: NextRequest) {
         body: emailConfig?.body || "",
         senderName: emailConfig?.senderName || "Sales Team",
       },
+      ragContent: ragContent || "",
     };
 
     const campaignFile = path.join(DATA_DIR, `brochures_${campaignId}.json`);

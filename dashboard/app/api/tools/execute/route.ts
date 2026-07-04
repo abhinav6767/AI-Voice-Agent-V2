@@ -459,6 +459,25 @@ async function handleSendBrochure(
     return `I couldn't find the brochure for ${projectName} right now. Our team will send it to you shortly.`;
   }
 
+  // Sanitize brochure content for email — remove PDF junk, keep only readable text
+  if (brochure.content) {
+    brochure.content = brochure.content
+      .replace(/<[0-9A-Fa-f]{16,}>/g, "")
+      .replace(/[^a-zA-Z0-9\s.,;:!?\-/'()&%$@#+=<>*\n]/g, " ")
+      .split("\n")
+      .filter((line: string) => {
+        const t = line.trim();
+        if (t.length < 3 || t.length > 300) return false;
+        const letters = (t.match(/[a-zA-Z]/g) || []).length;
+        return letters / t.length >= 0.3;
+      })
+      .join("\n")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+      .substring(0, 1500); // cap at 1500 chars for email
+  }
+
   // Get Gmail tokens from Supabase
   const tokens = await getIntegrationTokens(workspaceId, "gmail");
 

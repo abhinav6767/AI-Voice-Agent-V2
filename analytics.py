@@ -71,20 +71,38 @@ async def analyze_and_save_call(
             
         full_transcript = "\n".join(transcript)
         
+        # Detect real estate campaigns by campaign ID prefix
+        is_real_estate = campaign_id.startswith("re_")
+
         # Skip analysis if no real conversation happened
         if not full_transcript.strip():
             analysis = {"summary": "No conversation recorded.", "sentiment": "Neutral", "caller_intent": "Unknown"}
         else:
             # Use llama-3.1-8b-instant: higher rate limits (20K TPM) vs 70b model (12K TPM)
             client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-            prompt = (
-                "Analyze the following call transcript. Provide a JSON response with exactly these keys:\n"
-                "- \"summary\": A 1-2 sentence summary of the call.\n"
-                "- \"sentiment\": Positive, Neutral, or Negative.\n"
-                "- \"caller_intent\": What the caller was asking about or wanted.\n"
-                "- \"user_info\": A JSON object containing extracted details about the user (e.g., 'name', 'phone', 'purpose', 'appointment_details', 'city', 'email', etc.). Include all relevant info discussed in the call. If not mentioned, leave null.\n\n"
-                f"Transcript:\n{full_transcript}"
-            )
+
+            if is_real_estate:
+                prompt = (
+                    "Analyze the following real estate sales call transcript. Provide a JSON response with exactly these keys:\n"
+                    "- \"summary\": A 1-2 sentence summary of the call.\n"
+                    "- \"sentiment\": Positive, Neutral, or Negative.\n"
+                    "- \"caller_intent\": What the caller was asking about or wanted.\n"
+                    "- \"user_info\": A JSON object containing extracted details about the user (e.g., 'name', 'phone', 'email', 'city', etc.).\n"
+                    "- \"interested_projects\": An array of project names the caller showed interest in (from the brochure catalog). If none mentioned, use [].\n"
+                    "- \"email_status\": Whether a brochure was successfully sent — use 'sent', 'failed', or 'not_requested'.\n"
+                    "- \"property_requirements\": A JSON object with keys 'budget', 'location', 'property_type', 'bedrooms' based on what the caller mentioned. If not mentioned, use null for each.\n"
+                    "- \"brochure_sent\": The name of the specific project brochure that was emailed to the caller, or empty string if none.\n\n"
+                    f"Transcript:\n{full_transcript}"
+                )
+            else:
+                prompt = (
+                    "Analyze the following call transcript. Provide a JSON response with exactly these keys:\n"
+                    "- \"summary\": A 1-2 sentence summary of the call.\n"
+                    "- \"sentiment\": Positive, Neutral, or Negative.\n"
+                    "- \"caller_intent\": What the caller was asking about or wanted.\n"
+                    "- \"user_info\": A JSON object containing extracted details about the user (e.g., 'name', 'phone', 'purpose', 'appointment_details', 'city', 'email', etc.). Include all relevant info discussed in the call. If not mentioned, leave null.\n\n"
+                    f"Transcript:\n{full_transcript}"
+                )
             
             response = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -142,7 +160,7 @@ async def analyze_and_save_call(
             else:
                 call_status = "Called"
 
-            campaign_results.append({
+            result_entry = {
                 "row_index":    lead_row_index,
                 "phone_number": phone_number,
                 "lead_email":   lead_email,
@@ -151,7 +169,16 @@ async def analyze_and_save_call(
                 "sentiment":    analysis.get("sentiment", "Neutral"),
                 "intent":       analysis.get("caller_intent", "Unknown"),
                 "timestamp":    datetime.datetime.now().isoformat(),
-            })
+            }
+
+            # Add real estate-specific fields if this is a real estate campaign
+            if is_real_estate:
+                result_entry["email_status"] = analysis.get("email_status", "not_requested")
+                result_entry["interested_projects"] = analysis.get("interested_projects", [])
+                result_entry["property_requirements"] = analysis.get("property_requirements", {})
+                result_entry["brochure_sent"] = analysis.get("brochure_sent", "")
+
+            campaign_results.append(result_entry)
 
             with open(campaign_file, "w", encoding="utf-8") as f:
                 json.dump(campaign_results, f, indent=2)

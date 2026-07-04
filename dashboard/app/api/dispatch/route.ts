@@ -96,7 +96,7 @@ export async function POST(request: Request) {
 
         const metadata = JSON.stringify({
             phone_number:     phoneNumber,
-            user_prompt:      prompt || "",
+            user_prompt:      prompt || systemPrompt || "",  // pass system prompt as user_prompt too, so Python agent uses it directly
             model_provider:   modelProvider || "openai",
             voice_id:         voice || "alloy",
             tts_provider:     body.ttsProvider,
@@ -125,6 +125,10 @@ export async function POST(request: Request) {
         });
 
         console.log(`[DISPATCH] Step 1: Creating room ${roomName}`);
+        console.log(`[DISPATCH] system_prompt length: ${systemPrompt.length} chars, override: ${overrideSystemPrompt}`);
+        if (systemPrompt.length > 0) {
+            console.log(`[DISPATCH] system_prompt preview: ${systemPrompt.substring(0, 200)}...`);
+        }
 
         // STEP 1: Create the room explicitly with metadata
         await roomService.createRoom({

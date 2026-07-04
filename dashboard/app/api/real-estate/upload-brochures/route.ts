@@ -2,6 +2,49 @@ import { NextRequest, NextResponse } from "next/server";
 
 const MAX_CHARS_PER_BROCHURE = 3000; // Keep summaries compact for system prompt
 
+// ── Clean extracted text: keep only English words, numbers, and basic punctuation ──
+function cleanExtractedText(raw: string): string {
+  // Step 1: Remove PDF structural junk (hex streams, font refs, metadata)
+  let text = raw
+    .replace(/<[0-9A-Fa-f]{16,}>/g, "")           // hex strings like <0A1B2C3D...>
+    .replace(/<</g, "").replace(/>>/g, "")          // PDF object delimiters
+    .replace(/\bobj\b/gi, "").replace(/\bendobj\b/gi, "")
+    .replace(/\bstream\b/gi, "").replace(/\bendstream\b/gi, "")
+    .replace(/\bxref\b/gi, "").replace(/\btrailer\b/gi, "")
+    .replace(/\bstartxref\b/gi, "")
+    .replace(/\/Type\s*\/\w+/g, "")                 // /Type /Page etc
+    .replace(/\/Font[^}]*}/g, "")                   // /Font {...}
+    .replace(/\/[A-Z][a-zA-Z]+\s*=/g, "")          // /Key = value patterns
+    .replace(/\d+ \d+ R/g, "")                      // object references like "12 0 R"
+    .replace(/\bPID[\s:]\S+/gi, "")                 // PID metadata
+    .replace(/UUID[\s:]\S+/gi, "");                 // UUID metadata
+
+  // Step 2: Keep ONLY English letters, digits, spaces, and basic punctuation
+  // Remove everything else (non-ASCII, special chars, symbols)
+  text = text.replace(/[^a-zA-Z0-9\s.,;:!?\-/'()&%$@#+=<>*\n\r]/g, " ");
+
+  // Step 3: Remove lines that are too short (likely junk) or too long (binary data)
+  const lines = text.split(/\n/);
+  const cleaned = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (trimmed.length < 3) return false;               // too short
+    if (trimmed.length > 500) return false;              // likely binary
+    if (/^\d+$/.test(trimmed)) return false;             // just numbers
+    if (/^[a-zA-Z]\d{4,}$/.test(trimmed)) return false; // font encoding artifacts
+    // Must contain at least 30% letters to be real text
+    const letterCount = (trimmed.match(/[a-zA-Z]/g) || []).length;
+    if (letterCount / trimmed.length < 0.3) return false;
+    return true;
+  });
+
+  // Step 4: Collapse whitespace and trim
+  return cleaned
+    .join("\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // ── Text extractor for PDFs (multi-strategy) ─────────────────────────────────
 async function extractPdf(buffer: Buffer): Promise<string> {
   // Strategy 1: Try pdf-parse (works on most Node versions)
@@ -136,8 +179,8 @@ export async function POST(req: NextRequest) {
           };
         }
 
-        // Clean up whitespace
-        rawText = rawText.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+        // Clean: remove junk, keep only English + numbers + basic punctuation
+        rawText = cleanExtractedText(rawText);
 
         // Truncate to max chars
         let content = rawText;

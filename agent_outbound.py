@@ -273,11 +273,12 @@ def _patch_gemini_empty_response(llm_instance):
 # =============================================================================
 
 class OutboundTools(llm.ToolContext):
-    def __init__(self, ctx: agents.JobContext, ws_config: WorkspaceAgentConfig, phone_number: str = None):
+    def __init__(self, ctx: agents.JobContext, ws_config: WorkspaceAgentConfig, phone_number: str = None, campaign_id: str = ""):
         super().__init__(tools=[])
         self.ctx = ctx
         self.ws_config = ws_config
         self.phone_number = phone_number
+        self._campaign_id = campaign_id
         self.agent_session: Optional[AgentSession] = None
         self._unhandled_turns: int = 0  # Safety net: track consecutive unhandled turns
 
@@ -411,6 +412,67 @@ class OutboundTools(llm.ToolContext):
         # Return immediately — agent speaks this line while the transfer fires in background
         return "Sure thing — one moment while I connect you to someone from our team. Please hold!"
 
+    @llm.function_tool(
+        description=(
+            "Send a real estate project brochure to the lead via email. "
+            "Call this when the lead agrees to receive a brochure. "
+            "Pass the exact project_name from the brochure catalog and the lead's email address."
+        )
+    )
+    async def send_brochure(self, project_name: str, lead_email: str):
+        """
+        Send brochure email to the lead.
+
+        Args:
+            project_name: The exact project name from the brochure catalog.
+            lead_email: The lead's email address to send the brochure to.
+        """
+        logger.info(f"[TOOL] send_brochure: project={project_name}, email={lead_email}")
+
+        import urllib.request as _req
+        import json as _json
+
+        dashboard_url = os.getenv("DASHBOARD_URL", "http://localhost:3000").rstrip("/")
+        payload = _json.dumps({
+            "workspace_id": self.ws_config.workspace_id,
+            "action_name": "send_brochure",
+            "parameters": {
+                "project_name": project_name,
+                "lead_email": lead_email,
+                "campaign_id": self._campaign_id,
+            }
+        }).encode()
+
+        req = _req.Request(
+            f"{dashboard_url}/api/tools/execute",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            resp = _req.urlopen(req, timeout=15)
+            result = _json.loads(resp.read().decode())
+            return result.get("result", "Brochure sent successfully.")
+        except Exception as e:
+            logger.error(f"[TOOL] send_brochure failed: {e}")
+            return "I apologize, there was a small issue sending the email. Our team will follow up with the brochure shortly."
+
+    @llm.function_tool(
+        description=(
+            "End the current call after completing the conversation. "
+            "Use this after you have finished discussing projects, sent brochures, or wrapped up the call. "
+            "Say a polite goodbye first, then call this tool to hang up."
+        )
+    )
+    async def end_call(self):
+        """End the call gracefully. Say goodbye before calling this tool."""
+        logger.info("[TOOL] end_call: Disconnecting room")
+        try:
+            await asyncio.sleep(2)  # Give TTS time to finish speaking the goodbye
+            await self.ctx.room.disconnect()
+        except Exception as e:
+            logger.error(f"[TOOL] end_call failed: {e}")
+
 
 # =============================================================================
 # AGENT
@@ -427,16 +489,18 @@ class OutboundAssistant(Agent):
             # For campaigns, the campaign prompt completely overrides the base outbound config
             # to prevent persona clashes.
             instructions = user_prompt.strip()
-            logger.info("[OUTBOUND-DEBUG] Selected instructions source: is_campaign override")
+            logger.info(f"[OUTBOUND-DEBUG] Selected instructions source: is_campaign override ({len(instructions)} chars)")
         elif user_prompt and user_prompt.strip():
             instructions = (
                 f"{ws_config.system_prompt}\n\n"
                 f"## Additional Context for This Call:\n{user_prompt.strip()}"
             )
-            logger.info("[OUTBOUND-DEBUG] Selected instructions source: base config + user_prompt")
+            logger.info(f"[OUTBOUND-DEBUG] Selected instructions source: base config + user_prompt ({len(instructions)} chars)")
         else:
             instructions = ws_config.system_prompt
-            logger.info("[OUTBOUND-DEBUG] Selected instructions source: base config only")
+            logger.info(f"[OUTBOUND-DEBUG] Selected instructions source: base config only ({len(instructions)} chars)")
+
+        logger.info(f"[OUTBOUND-DEBUG] Instructions preview (first 300 chars): {repr(instructions[:300])}")
             
         # ── Telephony voice style prompt (latency optimization) ──
         instructions += (
@@ -586,6 +650,10 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Inject RAG content and lead context
     user_prompt = config_dict.get("user_prompt", "")
+
+    logger.info(f"[OUTBOUND] is_campaign={is_campaign_call}, override_prompt={override_system_prompt}, campaign_id={campaign_id!r}")
+    logger.info(f"[OUTBOUND] ws_config.system_prompt AFTER override ({len(ws_config.system_prompt)} chars): {repr(ws_config.system_prompt[:200])}")
+    logger.info(f"[OUTBOUND] user_prompt from metadata ({len(user_prompt)} chars): {repr(user_prompt[:200])}")
     
     rag_block = ""
     if rag_content and rag_content.strip():
@@ -619,7 +687,7 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"[OUTBOUND] Lead context injected: {lead_context!r}")
 
     # --- Build plugins ---
-    fnc_ctx   = OutboundTools(ctx, ws_config, phone_number)
+    fnc_ctx   = OutboundTools(ctx, ws_config, phone_number, campaign_id=campaign_id)
     built_tts = _build_tts(
         ws_config,
         config_dict.get("tts_provider"),
