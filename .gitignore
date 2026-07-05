@@ -47,3 +47,6 @@ graphify-out/
 # Misc temp files
 *.tmp
 *.log
+
+claude-or.bat
+start_openrouter_proxy.bat
