@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { Activity, Play, Clock, ChevronDown, ChevronUp, FileText } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Activity, Clock, ChevronDown, ChevronUp, FileText } from "lucide-react";
 import Link from "next/link";
 
 const AGENT_DID = "918065480288";
@@ -19,7 +19,102 @@ function getCallerNumber(log: any): string {
   return log.phone_number || "Unknown";
 }
 
-export default function CallLogsTable({ logs }: { logs: any[] }) {
+// ── Animated expandable row ──────────────────────────────────────────────────
+function ExpandedDetails({ log, isExpanded }: { log: any; isExpanded: boolean }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    if (contentRef.current) {
+      setHeight(isExpanded ? contentRef.current.scrollHeight : 0);
+    }
+  }, [isExpanded]);
+
+  return (
+    <tr className="border-b border-gray-100 dark:border-white/5">
+      <td colSpan={8} className="p-0">
+        <div
+          className="overflow-hidden transition-all duration-300 ease-in-out"
+          style={{ maxHeight: `${height}px`, opacity: isExpanded ? 1 : 0 }}
+        >
+          <div ref={contentRef} className="px-8 py-6 bg-gray-50/50 dark:bg-[#21262d]/50">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+              {/* Left Col: Analysis & Summary */}
+              <div className="space-y-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-gray-500" />
+                    Call Summary
+                  </h4>
+                  <p className="text-sm text-gray-600 dark:text-[#8b949e] bg-white dark:bg-[#161b22] p-3 rounded-lg border border-gray-200/50 dark:border-white/5 shadow-sm">
+                    {log.summary || "No summary available."}
+                  </p>
+                </div>
+
+                {Object.keys(log.user_info || {}).length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">Extracted Information</h4>
+                    <div className="bg-white dark:bg-[#161b22] p-3 rounded-lg border border-gray-200/50 dark:border-white/5 shadow-sm">
+                      <dl className="space-y-2">
+                        {Object.entries(log.user_info).map(([key, value]) => (
+                          <div key={key} className="grid grid-cols-3 gap-2">
+                            <dt className="text-xs font-medium text-gray-500 dark:text-[#8b949e] capitalize">{key.replace(/_/g, ' ')}</dt>
+                            <dd className="text-xs text-gray-900 dark:text-[#e6edf3] col-span-2">{String(value || '-')}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2">
+                  <Link
+                    href={`/logs/${log.id}`}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-white bg-white dark:bg-[#21262d] border border-gray-200 dark:border-[#30363d] rounded-md hover:bg-gray-50 dark:hover:bg-[#30363d] transition-colors shadow-sm"
+                  >
+                    Open Full Details Page
+                  </Link>
+                </div>
+              </div>
+
+              {/* Right Col: Transcript */}
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-gray-500" />
+                  Transcript Snapshot
+                </h4>
+                <div className="bg-white dark:bg-[#161b22] p-4 rounded-lg border border-gray-200/50 dark:border-white/5 shadow-sm max-h-[300px] overflow-y-auto">
+                  {log.transcript ? (
+                    <div className="space-y-3">
+                      {log.transcript.split('\n').filter(Boolean).map((line: string, i: number) => {
+                        const isAgent = line.toLowerCase().startsWith('assistant:') || line.toLowerCase().startsWith('agent:');
+                        return (
+                          <div key={i} className={`text-sm ${isAgent ? 'text-blue-600 dark:text-[#2f81f7]' : 'text-gray-700 dark:text-[#e6edf3]'}`}>
+                            <span className="font-semibold text-xs opacity-70 block mb-0.5">
+                              {isAgent ? 'Agent' : 'User'}
+                            </span>
+                            {line.replace(/^(assistant|user|agent):\s*/i, '')}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500 italic">No transcript available.</p>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ── Main table ───────────────────────────────────────────────────────────────
+export default function CallLogsTable({ logs, loading }: { logs: any[]; loading?: boolean }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   const toggleRow = (id: string) => {
@@ -36,9 +131,9 @@ export default function CallLogsTable({ logs }: { logs: any[] }) {
 
   return (
     <div className="rounded-2xl border border-gray-200/50 dark:border-white/8 bg-white/80 dark:bg-[#161b22]/60 backdrop-blur-md shadow-sm flex-1 overflow-hidden flex flex-col">
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto flex-1">
         <table className="w-full text-sm text-left">
-          <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50/80 dark:bg-white/[0.02] border-b border-gray-200/50 dark:border-white/5">
+          <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50/80 dark:bg-white/[0.02] border-b border-gray-200/50 dark:border-white/5 sticky top-0 z-10">
             <tr>
               <th className="px-4 py-4 w-10"></th>
               <th className="px-4 py-4 font-medium tracking-wider">Timestamp</th>
@@ -51,7 +146,7 @@ export default function CallLogsTable({ logs }: { logs: any[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100/80 dark:divide-white/5">
-            {logs.length === 0 ? (
+            {logs.length === 0 && !loading ? (
               <tr>
                 <td colSpan={8} className="px-6 py-16 text-center text-gray-400 dark:text-[#8b949e]">
                   <div className="flex flex-col items-center justify-center">
@@ -67,20 +162,23 @@ export default function CallLogsTable({ logs }: { logs: any[] }) {
                 const callerNumber = getCallerNumber(log);
                 const costDisplay = formatCostINR(log.cost);
                 const hasRecording = !!(log.recording_path || log.sip_call_id);
-                const isExpanded = expandedRows.has(log.id || String(idx));
-                
+                const rowKey = `${log.sip_call_id || log.id || 'log'}-${idx}`;
+                const isExpanded = expandedRows.has(rowKey);
+
                 const userName = log.user_info?.name || "Unknown Caller";
                 const whatIsSaid = log.caller_intent || log.summary || "No details available.";
 
                 return (
-                  <React.Fragment key={`${log.id || 'log'}-${idx}`}>
-                    <tr 
-                      className={`hover:bg-gray-50 dark:hover:bg-[#21262d] transition-colors group cursor-pointer ${isExpanded ? 'bg-gray-50 dark:bg-[#21262d]' : ''}`}
-                      onClick={() => toggleRow(log.id || String(idx))}
+                  <React.Fragment key={rowKey}>
+                    <tr
+                      className={`hover:bg-gray-50 dark:hover:bg-[#21262d] transition-colors duration-150 group cursor-pointer ${isExpanded ? 'bg-gray-50 dark:bg-[#21262d]' : ''}`}
+                      onClick={() => toggleRow(rowKey)}
                     >
                       <td className="px-4 py-4">
-                        <button className="text-gray-400 hover:text-gray-700 dark:text-[#8b949e] dark:hover:text-white transition-colors">
-                          {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                        <button className="text-gray-400 hover:text-gray-700 dark:text-[#8b949e] dark:hover:text-white transition-all duration-200">
+                          <div className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}>
+                            <ChevronDown className="w-5 h-5" />
+                          </div>
                         </button>
                       </td>
                       <td className="px-4 py-4 whitespace-nowrap text-gray-800 dark:text-[#e6edf3]">
@@ -145,83 +243,9 @@ export default function CallLogsTable({ logs }: { logs: any[] }) {
                         )}
                       </td>
                     </tr>
-                    
-                    {/* Expanded Details Row */}
-                    {isExpanded && (
-                      <tr className="bg-gray-50/50 dark:bg-[#21262d]/50 border-b border-gray-100 dark:border-white/5">
-                        <td colSpan={8} className="px-8 py-6">
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                            
-                            {/* Left Col: Analysis & Summary */}
-                            <div className="space-y-4">
-                              <div>
-                                <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
-                                  <FileText className="w-4 h-4 text-gray-500" />
-                                  Call Summary
-                                </h4>
-                                <p className="text-sm text-gray-600 dark:text-[#8b949e] bg-white dark:bg-[#161b22] p-3 rounded-lg border border-gray-200/50 dark:border-white/5 shadow-sm">
-                                  {log.summary || "No summary available."}
-                                </p>
-                              </div>
-                              
-                              {Object.keys(log.user_info || {}).length > 0 && (
-                                <div>
-                                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">Extracted Information</h4>
-                                  <div className="bg-white dark:bg-[#161b22] p-3 rounded-lg border border-gray-200/50 dark:border-white/5 shadow-sm">
-                                    <dl className="space-y-2">
-                                      {Object.entries(log.user_info).map(([key, value]) => (
-                                        <div key={key} className="grid grid-cols-3 gap-2">
-                                          <dt className="text-xs font-medium text-gray-500 dark:text-[#8b949e] capitalize">{key.replace(/_/g, ' ')}</dt>
-                                          <dd className="text-xs text-gray-900 dark:text-[#e6edf3] col-span-2">{String(value || '-')}</dd>
-                                        </div>
-                                      ))}
-                                    </dl>
-                                  </div>
-                                </div>
-                              )}
-                              
-                              <div className="pt-2">
-                                <Link
-                                  href={`/logs/${log.id}`}
-                                  className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-white bg-white dark:bg-[#21262d] border border-gray-200 dark:border-[#30363d] rounded-md hover:bg-gray-50 dark:hover:bg-[#30363d] transition-colors shadow-sm"
-                                >
-                                  <Play className="w-4 h-4" />
-                                  Open Full Details Page
-                                </Link>
-                              </div>
-                            </div>
 
-                            {/* Right Col: Transcript */}
-                            <div>
-                              <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
-                                <Activity className="w-4 h-4 text-gray-500" />
-                                Transcript Snapshot
-                              </h4>
-                              <div className="bg-white dark:bg-[#161b22] p-4 rounded-lg border border-gray-200/50 dark:border-white/5 shadow-sm max-h-[300px] overflow-y-auto">
-                                {log.transcript ? (
-                                  <div className="space-y-3">
-                                    {log.transcript.split('\n').filter(Boolean).map((line: string, i: number) => {
-                                      const isAgent = line.toLowerCase().startsWith('assistant:') || line.toLowerCase().startsWith('agent:');
-                                      return (
-                                        <div key={i} className={`text-sm ${isAgent ? 'text-blue-600 dark:text-[#2f81f7]' : 'text-gray-700 dark:text-[#e6edf3]'}`}>
-                                          <span className="font-semibold text-xs opacity-70 block mb-0.5">
-                                            {isAgent ? 'Agent' : 'User'}
-                                          </span>
-                                          {line.replace(/^(assistant|user|agent):\s*/i, '')}
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                ) : (
-                                  <p className="text-sm text-gray-500 italic">No transcript available.</p>
-                                )}
-                              </div>
-                            </div>
-                            
-                          </div>
-                        </td>
-                      </tr>
-                    )}
+                    {/* Animated Expanded Details Row */}
+                    <ExpandedDetails log={log} isExpanded={isExpanded} />
                   </React.Fragment>
                 );
               })

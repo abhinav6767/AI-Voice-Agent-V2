@@ -13,6 +13,7 @@ export default function CustomAudioPlayer({ src }: { src: string }) {
   const [isMuted, setIsMuted] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -57,11 +58,19 @@ export default function CustomAudioPlayer({ src }: { src: string }) {
       setCurrentTime(0);
     };
 
+    const handleError = () => {
+      const err = audio.error;
+      const msg = err?.message || "Unknown error";
+      console.error("[AudioPlayer] Error:", msg, "src:", src);
+      setError(`Cannot play recording: ${msg}`);
+    };
+
     audio.addEventListener("timeupdate", updateProgress);
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     audio.addEventListener("durationchange", handleDurationChange);
     audio.addEventListener("canplaythrough", handleCanPlayThrough);
     audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("error", handleError);
 
     return () => {
       audio.removeEventListener("timeupdate", updateProgress);
@@ -69,8 +78,9 @@ export default function CustomAudioPlayer({ src }: { src: string }) {
       audio.removeEventListener("durationchange", handleDurationChange);
       audio.removeEventListener("canplaythrough", handleCanPlayThrough);
       audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("error", handleError);
     };
-  }, [isDragging]);
+  }, [isDragging, src]);
 
   const togglePlay = () => {
     if (audioRef.current) {
@@ -149,11 +159,25 @@ export default function CustomAudioPlayer({ src }: { src: string }) {
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  if (!src) {
+    return (
+      <div className="w-full bg-gray-50 dark:bg-[#21262d] border border-gray-200 dark:border-[#30363d] rounded-lg p-4 text-center text-sm text-gray-400 dark:text-[#8b949e]">
+        No recording available for this call.
+      </div>
+    );
+  }
+
   return (
     <div className="w-full bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg p-4 shadow-sm transition-colors duration-200">
       {/* Force full download so duration is known for seeking */}
       <audio ref={audioRef} src={src} preload="auto" />
-      
+
+      {error && (
+        <div className="mb-3 px-3 py-2 rounded-md bg-red-50 dark:bg-[#da3633]/10 border border-red-200 dark:border-[#da3633]/30 text-xs text-red-600 dark:text-[#da3633]">
+          {error}
+        </div>
+      )}
+
       <div className="flex items-center gap-4">
         <button 
           onClick={togglePlay}

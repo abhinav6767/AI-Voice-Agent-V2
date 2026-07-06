@@ -117,7 +117,10 @@ export async function getCallLogs() {
       const parsedTransCost = vobizTranscript?.transcription_cost != null ? parseFloat(vobizTranscript.transcription_cost) : 0;
       const parsedRecRate = vobizRecording?.recording_storage_rate != null ? parseFloat(vobizRecording.recording_storage_rate) : 0;
       const parsedRecDur = vobizRecording?.recording_storage_duration != null ? parseFloat(vobizRecording.recording_storage_duration) : 0;
-      
+
+      // Extract actual recording URL from Vobiz response
+      const recordingUrl = vobizRecording?.url || vobizRecording?.recording_url || vobizRecording?.audio_url || null;
+
       mergedLogs.push({
         ...localMatch, // Inherit local fields
         transcript: transcriptStr,
@@ -126,6 +129,7 @@ export async function getCallLogs() {
         caller_intent: intentStr,
         id: cdr.uuid,
         sip_call_id: cdr.sip_call_id,
+        recording_path: recordingUrl,
         timestamp: cdr.start_time || localMatch?.timestamp || new Date().toISOString(),
         phone_number: cdr.destination_number || cdr.caller_id_number,
         caller_number: cdr.call_direction === "inbound" ? cdr.caller_id_number : cdr.destination_number,

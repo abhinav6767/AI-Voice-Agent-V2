@@ -64,35 +64,96 @@ export async function GET(
   }
 
   if (authId && authToken) {
-    try {
-      // Extract the call UUID from the filename (e.g. uuid.wav)
-      const callUuid = filename.replace(/\.wav$/, "");
-      const vobizMediaUrl = `https://media.vobiz.ai/v1/Account/${authId}/Recording/${callUuid}.wav`;
-      
-      const res = await fetch(vobizMediaUrl, {
-        headers: {
-          "X-Auth-ID": authId,
-          "X-Auth-Token": authToken
-        }
-      });
-      
-      if (res.ok) {
-        // Download the entire audio into a buffer so we can report Content-Length
-        // This enables the browser to know the duration and allow seeking
-        const arrayBuffer = await res.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
+    const headers = {
+      "X-Auth-ID": authId,
+      "X-Auth-Token": authToken,
+      "Accept": "application/json"
+    };
 
-        return new NextResponse(buffer, {
-          headers: {
-            "Content-Type": "audio/wav",
-            "Content-Length": buffer.length.toString(),
-            "Accept-Ranges": "bytes",
+    try {
+      const callUuid = filename.replace(/\.wav$/, "");
+      console.log(`[Recordings] Looking up recording for call: ${callUuid}`);
+
+      // Step 1: Search recordings list — the file name is the SIP call UUID,
+      // but Vobiz recordings have their own UUID. Match by call_uuid field.
+      let recordingUuid: string | null = null;
+      let recordingMeta: any = null;
+      let offset = 0;
+      let found = false;
+
+      for (let page = 0; page < 20 && !found; page++) {
+        const listUrl = `https://api.vobiz.ai/api/v1/Account/${authId}/Recording/?limit=100&offset=${offset}`;
+        const listRes = await fetch(listUrl, { headers });
+        if (!listRes.ok) break;
+
+        const listJson = await listRes.json();
+        const items = listJson?.objects ?? listJson?.data ?? listJson?.results ?? [];
+        if (items.length === 0) break;
+
+        for (const item of items) {
+          if (item.call_uuid === callUuid || item.sip_call_id === callUuid) {
+            recordingUuid = item.uuid || item.id;
+            recordingMeta = item;
+            found = true;
+            break;
           }
+        }
+        offset += items.length;
+      }
+
+      if (recordingUuid) {
+        console.log(`[Recordings] Found recording UUID: ${recordingUuid} for call ${callUuid}`);
+
+        // Step 2: Try to get the recording detail which may have a direct URL
+        const detailUrl = `https://api.vobiz.ai/api/v1/Account/${authId}/Recording/${recordingUuid}/`;
+        const detailRes = await fetch(detailUrl, { headers });
+        let audioUrl: string | null = null;
+
+        if (detailRes.ok) {
+          const detail = await detailRes.json();
+          audioUrl = detail.url || detail.recording_url || detail.audio_url || detail.file_url || detail.download_url || detail.media_url;
+          console.log(`[Recordings] Detail audio URL: ${audioUrl || "none"}`);
+        }
+
+        // Step 3: If no direct URL, try media.vobiz.ai with the recording UUID
+        if (!audioUrl) {
+          audioUrl = `https://media.vobiz.ai/v1/Account/${authId}/Recording/${recordingUuid}.wav`;
+        }
+
+        console.log(`[Recordings] Fetching audio from: ${audioUrl}`);
+        const audioRes = await fetch(audioUrl, {
+          headers: { "X-Auth-ID": authId, "X-Auth-Token": authToken }
         });
+
+        if (audioRes.ok) {
+          const contentType = audioRes.headers.get("content-type") || "";
+          if (contentType.includes("audio")) {
+            const arrayBuffer = await audioRes.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            console.log(`[Recordings] ✅ Got ${buffer.length} bytes, content-type: ${contentType}`);
+
+            return new NextResponse(buffer, {
+              headers: {
+                "Content-Type": contentType,
+                "Content-Length": buffer.length.toString(),
+                "Accept-Ranges": "bytes",
+              }
+            });
+          } else {
+            console.error(`[Recordings] Response is not audio: ${contentType}`);
+          }
+        } else {
+          const errText = await audioRes.text().catch(() => "");
+          console.error(`[Recordings] Audio fetch failed: ${audioRes.status} ${errText.substring(0, 200)}`);
+        }
+      } else {
+        console.error(`[Recordings] No recording found matching call UUID: ${callUuid}`);
       }
     } catch (e) {
-      console.error("Failed to proxy recording from Vobiz", e);
+      console.error("[Recordings] Failed to proxy recording from Vobiz", e);
     }
+  } else {
+    console.error("[Recordings] Missing VOBIZ_AUTH_ID or VOBIZ_AUTH_TOKEN");
   }
 
   return new NextResponse("Recording not found locally or on Vobiz", { status: 404 });
