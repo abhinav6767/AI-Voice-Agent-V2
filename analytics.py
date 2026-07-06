@@ -178,12 +178,22 @@ async def analyze_and_save_call(
                 result_entry["property_requirements"] = analysis.get("property_requirements", {})
                 result_entry["brochure_sent"] = analysis.get("brochure_sent", "")
 
-            campaign_results.append(result_entry)
+            # Upsert: replace existing "Connected" entry for this row, or append
+            existing_idx = None
+            for idx, entry in enumerate(campaign_results):
+                if entry.get("row_index") == lead_row_index and entry.get("status") == "Connected":
+                    existing_idx = idx
+                    break
+
+            if existing_idx is not None:
+                campaign_results[existing_idx] = result_entry
+                logger.info(f"[ANALYTICS] Campaign result updated (row {lead_row_index}, was 'Connected' → '{call_status}')")
+            else:
+                campaign_results.append(result_entry)
+                logger.info(f"[ANALYTICS] Campaign result appended (row {lead_row_index}, status '{call_status}')")
 
             with open(campaign_file, "w", encoding="utf-8") as f:
                 json.dump(campaign_results, f, indent=2)
-
-            logger.info(f"[ANALYTICS] Campaign result written to campaign_{campaign_id}.json (row {lead_row_index})")
 
         # ── Workflow engine webhook ───────────────────────────────────────────
         # When this call was triggered by the Workflow engine, notify it that

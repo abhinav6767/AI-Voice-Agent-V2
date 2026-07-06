@@ -195,6 +195,7 @@ export default function CallDispatcher() {
                     systemPrompt:    systemPrompt.trim(),
                     llmModel:        catalog.llm[selectedProvider]?.models?.[0]?.value || "",
                     initialGreeting: greeting,
+                    ragContent:      ragContent.trim(),
                 }),
             });
             const data = await res.json();

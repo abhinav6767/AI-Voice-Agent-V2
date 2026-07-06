@@ -71,8 +71,21 @@ class WorkspaceAgentConfig:
     # Resources injected into system prompt
     resources: list                    = field(default_factory=list)
 
+    # Pre-formatted workspace resources text (can be re-appended when system_prompt is overridden)
+    workspace_resources_text: str      = ""
+
+    # Custom functions (transfer_call, etc.) with enabled/disabled state
+    custom_functions: list             = field(default_factory=list)
+
     # Source flag for debugging
     source: str                        = "static_fallback"   # "database" | "static_fallback"
+
+    def is_function_enabled(self, function_name: str) -> bool:
+        """Check if a custom function is enabled. Defaults to True if not found."""
+        for fn in self.custom_functions:
+            if fn.get("name") == function_name:
+                return fn.get("enabled", True)
+        return True  # default: enabled if not configured
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +169,20 @@ def _supabase_rpc(function_name: str, params: dict) -> Optional[dict]:
     return None
 
 
+def _build_resources_text(resources: list) -> str:
+    """Build the formatted knowledge base text from a resources list.
+    Returns a string ready to append to the system prompt, or empty string if no resources."""
+    if not resources:
+        return ""
+    text = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nADDITIONAL KNOWLEDGE BASE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    for res in resources:
+        if res.get("type") == "url":
+            text += f"\nReference URL — {res.get('name', '')}: {res.get('value', '')}"
+        else:
+            text += f"\n## {res.get('name', 'Resource')}\n{res.get('value', '')}\n"
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Static fallback — reads existing data/agent_config.json just like before
 # ---------------------------------------------------------------------------
@@ -181,15 +208,12 @@ def _load_static_fallback(mode: str) -> WorkspaceAgentConfig:
         # Build system prompt with resources appended
         prompt = cfg.get("system_prompt", result.system_prompt)
         resources = cfg.get("resources", [])
-        if resources:
-            prompt += "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nADDITIONAL KNOWLEDGE BASE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            for res in resources:
-                if res.get("type") == "url":
-                    prompt += f"\nReference URL — {res.get('name', '')}: {res.get('value', '')}"
-                else:
-                    prompt += f"\n## {res.get('name', 'Resource')}\n{res.get('value', '')}\n"
+        resources_text = _build_resources_text(resources)
+        if resources_text:
+            prompt += resources_text
 
         result.system_prompt     = prompt
+        result.workspace_resources_text = resources_text
         result.initial_greeting  = cfg.get("initial_greeting",  result.initial_greeting)
         result.fallback_greeting = cfg.get("fallback_greeting", result.fallback_greeting)
         result.stt_provider      = cfg.get("stt_provider",      result.stt_provider)
@@ -203,6 +227,7 @@ def _load_static_fallback(mode: str) -> WorkspaceAgentConfig:
         result.llm_temperature   = float(cfg.get("llm_temperature", result.llm_temperature))
         result.transfer_number   = cfg.get("transfer_number",   result.transfer_number)
         result.resources         = resources
+        result.custom_functions  = cfg.get("custom_functions",  [])
 
         # SIP trunk IDs from .env for the static fallback path
         result.outbound_trunk_id = os.getenv("VOBIZ_SIP_TRUNK_ID")
@@ -332,20 +357,13 @@ async def load_workspace_config(
         llm_temperature  = float(agent_row.get("llm_temperature", 0.70) or 0.70),
         transfer_number  = agent_row.get("transfer_number"),
         resources        = agent_row.get("resources",        []) or [],
+        custom_functions = agent_row.get("custom_functions", []) or [],
     )
 
     # Append resources to system_prompt (same logic as static path)
-    if result.resources:
-        result.system_prompt += (
-            "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "ADDITIONAL KNOWLEDGE BASE\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        )
-        for res in result.resources:
-            if res.get("type") == "url":
-                result.system_prompt += f"\nReference URL — {res.get('name', '')}: {res.get('value', '')}"
-            else:
-                result.system_prompt += f"\n## {res.get('name', 'Resource')}\n{res.get('value', '')}\n"
+    result.workspace_resources_text = _build_resources_text(result.resources)
+    if result.workspace_resources_text:
+        result.system_prompt += result.workspace_resources_text
 
     # SIP trunk IDs from the workspace_config table (via get_workspace_config RPC).
     # We do NOT fall back to .env vars here — if a workspace has been provisioned

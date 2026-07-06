@@ -112,6 +112,7 @@ function SentimentBadge({ sentiment }: { sentiment: string }) {
 function StatusBadge({ status }: { status: string }) {
     const map: Record<string, { icon: any; color: string }> = {
         Called:     { icon: CheckCircle2,  color: '#3fb950' },
+        Connected:  { icon: Phone,         color: '#f0883e' },
         'No Answer':{ icon: PhoneMissed,   color: '#d29922' },
         Failed:     { icon: XCircle,       color: '#f85149' },
         Pending:    { icon: Clock,         color: '#8b949e' },
@@ -1322,9 +1323,13 @@ export default function BulkDialer() {
                                                 {columnMap.name && <td className="px-3 py-2 text-[#e6edf3] font-medium">{lead[columnMap.name] || '—'}</td>}
                                                 <td className="px-3 py-2 text-[#c9d1d9] font-mono">{lead[columnMap.phone]}</td>
                                                 <td className="px-3 py-2">
-                                                    {isCurrentlyDialing ? (
+                                                    {isCurrentlyDialing && !result ? (
                                                         <span className="flex items-center gap-1 text-[#2f81f7] text-[10px] font-semibold">
                                                             <Loader2 className="w-3 h-3 animate-spin" /> Dialing…
+                                                        </span>
+                                                    ) : result?.status === 'Connected' ? (
+                                                        <span className="flex items-center gap-1 text-[#f0883e] text-[10px] font-semibold">
+                                                            <Loader2 className="w-3 h-3 animate-spin" /> In Call…
                                                         </span>
                                                     ) : result ? (
                                                         <StatusBadge status={result.status} />

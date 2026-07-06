@@ -77,9 +77,9 @@ logger.info("[OUTBOUND] Agent initialized")
 
 # Pre-load VAD model at startup — tuned for telephony
 _VAD = silero.VAD.load(
-    min_silence_duration=0.55,    # 550ms — matches natural phone conversation pauses
+    min_silence_duration=0.25,    # 250ms — aggressive silence detection for fastest response
     activation_threshold=0.35,    # Higher threshold to filter telephony line noise/static
-    min_speech_duration=0.25,     # 250ms minimum speech to register (filters DTMF/pops/breaths)
+    min_speech_duration=0.15,     # 150ms minimum speech to register (near-instant detection)
     sample_rate=16000,             # Match Deepgram's ingestion rate — no resampling overhead
 )
 
@@ -187,7 +187,7 @@ def _build_llm(ws_config: WorkspaceAgentConfig, provider_override: str = None):
                 api_key=gemini_key,
                 model=gemini_model,
                 temperature=float(os.getenv("GROQ_TEMPERATURE", str(ws_config.llm_temperature))),
-            )
+                )
             _patch_gemini_empty_response(llm_instance)
             return llm_instance
         logger.warning("[LLM] Google requested but no API key found — falling back to Groq")
@@ -200,7 +200,7 @@ def _build_llm(ws_config: WorkspaceAgentConfig, provider_override: str = None):
             return openai.LLM(
                 api_key=openai_key,
                 model=model,
-            )
+                )
         logger.warning("[LLM] OpenAI requested but OPENAI_API_KEY not set — falling back to Groq")
 
     # Last-resort fallback: Groq
@@ -487,8 +487,13 @@ class OutboundAssistant(Agent):
         
         if is_campaign and user_prompt and user_prompt.strip():
             # For campaigns, the campaign prompt completely overrides the base outbound config
-            # to prevent persona clashes.
-            instructions = user_prompt.strip()
+            # to prevent persona clashes. But we still need workspace-level resources.
+            # IMPORTANT: Knowledge base MUST come FIRST so the LLM prioritizes it.
+            instructions = ""
+            if ws_config.workspace_resources_text:
+                instructions += ws_config.workspace_resources_text
+                logger.info(f"[OUTBOUND-DEBUG] Prepended workspace resources ({len(ws_config.workspace_resources_text)} chars)")
+            instructions += user_prompt.strip()
             logger.info(f"[OUTBOUND-DEBUG] Selected instructions source: is_campaign override ({len(instructions)} chars)")
         elif user_prompt and user_prompt.strip():
             instructions = (
@@ -501,21 +506,28 @@ class OutboundAssistant(Agent):
             logger.info(f"[OUTBOUND-DEBUG] Selected instructions source: base config only ({len(instructions)} chars)")
 
         logger.info(f"[OUTBOUND-DEBUG] Instructions preview (first 300 chars): {repr(instructions[:300])}")
+        # Check if knowledge base is present in final instructions
+        if "KNOWLEDGE BASE" in instructions or "Knowledge Base" in instructions:
+            kb_idx = instructions.find("KNOWLEDGE BASE")
+            if kb_idx == -1:
+                kb_idx = instructions.index("Knowledge Base")
+            logger.info(f"[OUTBOUND-DEBUG] ✅ Knowledge Base FOUND in instructions at position {kb_idx}, total instructions: {len(instructions)} chars")
+            logger.info(f"[OUTBOUND-DEBUG] KB preview: {repr(instructions[kb_idx:kb_idx+200])}")
+        else:
+            logger.warning(f"[OUTBOUND-DEBUG] ❌ Knowledge Base NOT found in instructions! Total: {len(instructions)} chars")
             
         # ── Telephony voice style prompt (latency optimization) ──
         instructions += (
-            "\n\n## TELEPHONY VOICE RULES (MANDATORY):\n"
+            "\n\n## TELEPHONY VOICE RULES (MANDATORY — SPEED IS CRITICAL):\n"
             "You are speaking on a live telephone call, NOT writing a chat message.\n"
-            "1. BREVITY: Your responses must be 1 or 2 short sentences MAX. Never use bullet points, numbered lists, or bold markdown.\n"
-            "2. FILLERS: Use natural conversational fillers like 'Haan ji,' 'Bilkul,' 'Achha,' 'Samajh gaya,' at the start.\n"
+            "1. EXTREME BREVITY: Your responses MUST be 1 short sentence MAX (under 15 words). "
+            "Two sentences only if absolutely necessary. NEVER use bullet points, numbered lists, or markdown.\n"
+            "2. FILLERS: Start with natural fillers like 'Haan ji,' 'Bilkul,' 'Achha,' 'Sure,' 'Right.'\n"
             "3. TTS SAFETY: Never write symbols, dates, numbers, or currencies as digits. "
-            "Spell them out in words. Write 'five hundred rupees' not '₹500'. Write 'twelfth of May, twenty twenty-six' not '12/05/2026'. "
-            "Never use asterisks, hashtags, or any markdown formatting.\n"
-            "4. PACING: Speak in short clauses. Use commas and periods to create natural pauses.\n"
-            "5. ALWAYS RESPOND: Every user message MUST get a spoken reply. Never stay silent. "
-            "If you are unsure what to say, acknowledge with something natural like 'Haan ji, bataiye' or 'Ji sun raha hoon.'\n"
-            "6. NATURAL FLOW: Speak like a real person on a phone call. React to what they say. "
-            "Match their energy — if they are casual, be casual. If they are formal, be formal.\n"
+            "Spell them out. Never use asterisks, hashtags, or markdown formatting.\n"
+            "4. SPEED: Respond as fast as possible. Short answers beat long explanations.\n"
+            "5. ALWAYS RESPOND: Every message MUST get a reply. If unsure, say 'Haan ji, bataiye' or 'Ji sun raha hoon.'\n"
+            "6. NATURAL FLOW: Match the caller's energy and language. Be conversational, not robotic.\n"
         )
 
         instructions += (
@@ -529,16 +541,18 @@ class OutboundAssistant(Agent):
         if tts_language and "en" not in tts_language.lower():
             instructions += f"\n\nCRITICAL: Your current target language is '{tts_language}'. You MUST speak entirely in this language code. Do NOT speak English."
 
-        instructions += (
-            "\n\nCRITICAL — HUMAN TRANSFER RULE (overrides everything else): "
-            "If the customer says ANYTHING like 'I want to talk to a person', 'connect me to someone', "
-            "'can I speak to a human', 'I don't want to talk to a bot', or any similar phrasing — "
-            "in ANY tone, calm or angry — you MUST immediately call `transfer_call`. "
-            "Do NOT ask clarifying questions first. Do NOT offer alternatives first. "
-            "Just say 'Sure thing, one moment' and call the tool. "
-            "NEVER end the call without either calling `transfer_call` or logging a callback. "
-            "Hanging up without transferring is never acceptable."
-        )
+        # Only inject the transfer rule if transfer_call is enabled in config
+        if ws_config.is_function_enabled("transfer_call"):
+            instructions += (
+                "\n\nCRITICAL — HUMAN TRANSFER RULE (overrides everything else): "
+                "If the customer says ANYTHING like 'I want to talk to a person', 'connect me to someone', "
+                "'can I speak to a human', 'I don't want to talk to a bot', or any similar phrasing — "
+                "in ANY tone, calm or angry — you MUST immediately call `transfer_call`. "
+                "Do NOT ask clarifying questions first. Do NOT offer alternatives first. "
+                "Just say 'Sure thing, one moment' and call the tool. "
+                "NEVER end the call without either calling `transfer_call` or logging a callback. "
+                "Hanging up without transferring is never acceptable."
+            )
             
         super().__init__(instructions=instructions, tools=tools)
         self._initial_greeting = ws_config.initial_greeting
@@ -609,6 +623,10 @@ async def entrypoint(ctx: agents.JobContext):
 
     if meta_system_prompt:
         ws_config.system_prompt = meta_system_prompt
+        # Re-append workspace resources that were baked into the original system_prompt
+        if ws_config.workspace_resources_text:
+            ws_config.system_prompt += ws_config.workspace_resources_text
+            logger.info(f"[OUTBOUND] Re-appended workspace resources ({len(ws_config.workspace_resources_text)} chars) after metadata override")
         logger.info(f"[OUTBOUND] Config override: system_prompt from metadata ({len(meta_system_prompt)} chars)")
     if meta_llm_model:
         ws_config.llm_model = meta_llm_model
@@ -637,6 +655,14 @@ async def entrypoint(ctx: agents.JobContext):
     metadata_greeting = config_dict.get("initial_greeting", "")
     metadata_agent_name = config_dict.get("agent_name", "")
 
+    # ── DETAILED RAG CONTENT LOGGING ────────────────────────────────────────
+    logger.info(f"[OUTBOUND-RAG] raw rag_content type={type(rag_content).__name__}, len={len(str(rag_content))}")
+    if rag_content:
+        logger.info(f"[OUTBOUND-RAG] rag_content PREVIEW (first 300): {repr(rag_content[:300])}")
+    else:
+        logger.warning(f"[OUTBOUND-RAG] ❌ rag_content is EMPTY or missing from metadata!")
+        logger.warning(f"[OUTBOUND-RAG] All metadata keys: {list(config_dict.keys())}")
+
     is_campaign_call = bool(campaign_id or workflow_run_id or override_system_prompt)
 
     # Override ws_config fields if provided dynamically via manual dialer or bulk dialer
@@ -658,20 +684,34 @@ async def entrypoint(ctx: agents.JobContext):
     rag_block = ""
     if rag_content and rag_content.strip():
         rag_block = (
-            "\n\n## Knowledge Base (Use this information to answer questions during the call):\n"
+            "\n\n══════════════════════════════════════════════════════════\n"
+            "CRITICAL — KNOWLEDGE BASE (YOU MUST USE THIS INFORMATION):\n"
+            "══════════════════════════════════════════════════════════\n"
+            "The following is your knowledge base. When the customer asks ANY question\n"
+            "about products, prices, features, specifications, availability, or details,\n"
+            "you MUST answer ONLY from this knowledge base. Do NOT make up information.\n"
+            "If the answer is in the knowledge base, use it. If not, say you'll check.\n"
+            "══════════════════════════════════════════════════════════\n\n"
             + rag_content.strip()
         )
-        logger.info(f"[OUTBOUND] RAG content loaded ({len(rag_content)} chars)")
+        logger.info(f"[OUTBOUND-RAG] ✅ RAG block built ({len(rag_block)} chars)")
+        logger.info(f"[OUTBOUND-RAG] rag_block PREVIEW: {repr(rag_block[:200])}")
+    else:
+        logger.warning(f"[OUTBOUND-RAG] ❌ rag_content is empty/whitespace — no RAG block built!")
 
     if is_campaign_call:
         # For campaigns, we override the base system prompt entirely.
-        # So we append RAG directly to the user_prompt.
+        # IMPORTANT: RAG must come BEFORE the campaign prompt so LLM prioritizes it.
         if rag_block:
-            user_prompt += rag_block
+            user_prompt = rag_block + "\n\n" + user_prompt
+            logger.info(f"[OUTBOUND-RAG] ✅ RAG prepended to user_prompt for campaign call ({len(user_prompt)} chars)")
+        else:
+            logger.warning(f"[OUTBOUND-RAG] ❌ No RAG block to prepend for campaign call!")
     else:
         # For manual 1-off calls, RAG appends to the base system prompt.
         if rag_block:
             ws_config.system_prompt += rag_block
+            logger.info(f"[OUTBOUND-RAG] ✅ RAG appended to ws_config.system_prompt for manual call")
 
     # Build a lead-context string to prepend to the user_prompt
     if lead_name or lead_data:
@@ -719,19 +759,19 @@ async def entrypoint(ctx: agents.JobContext):
             turn_detection="vad",
             endpointing={
                 "mode": "dynamic",       # ADAPTIVE endpointing — matches each caller's pace
-                "min_delay": 0.3,        # 300ms minimum wait after silence (prevents responding mid-thought)
-                "max_delay": 2.0,        # 2s max before forcing turn close (allows natural pauses)
+                "min_delay": 0.15,       # 150ms minimum wait after silence (near-instant response)
+                "max_delay": 0.8,        # 800ms max before forcing turn close (fastest turns)
             },
             interruption={
                 "enabled": True,
                 "mode": "vad",           # Use VAD mode (switch to "adaptive" if on LiveKit Cloud)
-                "min_duration": 0.5,     # 500ms minimum speech to register as interruption
+                "min_duration": 0.25,    # 250ms minimum speech to register as interruption (fastest barge-in)
                 "min_words": 1,          # Require at least 1 word before interrupting
-                "false_interruption_timeout": 2.0,  # Wait 2s before resuming after noise
+                "false_interruption_timeout": 1.0,  # 1s before resuming after noise (fastest recovery)
                 "resume_false_interruption": True,
             },
             preemptive_generation={
-                "enabled": True,         # Re-enable — LLM pre-generates response while user talks
+                "enabled": True,         # LLM pre-generates response while user talks
             },
         ),
     )
@@ -741,9 +781,17 @@ async def entrypoint(ctx: agents.JobContext):
 
     call_connected_event = asyncio.Event()
 
+    # Filter out disabled custom functions (e.g. transfer_call)
+    transfer_enabled = ws_config.is_function_enabled("transfer_call")
+    logger.info(f"[OUTBOUND] transfer_call enabled={transfer_enabled}")
+    available_tools = [
+        tool for name, tool in fnc_ctx.function_tools.items()
+        if transfer_enabled or name != "transfer_call"
+    ]
+
     agent_instance = OutboundAssistant(
         ws_config=ws_config,
-        tools=list(fnc_ctx.function_tools.values()),
+        tools=available_tools,
         user_prompt=user_prompt,
         tts_language=config_dict.get("tts_language"),
         is_campaign=is_campaign_call,
@@ -831,9 +879,38 @@ async def entrypoint(ctx: agents.JobContext):
                 )
             )
             logger.info("[OUTBOUND] Call answered. Triggering greeting...")
-            # Give the WebRTC stream a brief moment to stabilise after SIP answer
-            await asyncio.sleep(1.5)
+            # Brief moment for WebRTC stream to stabilise after SIP answer
+            await asyncio.sleep(0.8)
             call_connected_event.set()
+
+            # ── Write "Connected" status so the dashboard shows real-time progress ──
+            if campaign_id:
+                try:
+                    analytics_result = {
+                        "row_index":    lead_row_index,
+                        "phone_number": phone_number or "unknown",
+                        "lead_email":   lead_email,
+                        "status":       "Connected",
+                        "remarks":      "Call connected",
+                        "sentiment":    "",
+                        "intent":       "",
+                        "timestamp":    datetime.datetime.now().isoformat(),
+                    }
+                    campaign_file = os.path.join("data", f"campaign_{campaign_id}.json")
+                    existing = []
+                    if os.path.exists(campaign_file):
+                        try:
+                            with open(campaign_file, "r", encoding="utf-8") as f:
+                                existing = json.load(f)
+                        except Exception:
+                            pass
+                    existing.append(analytics_result)
+                    with open(campaign_file, "w", encoding="utf-8") as f:
+                        json.dump(existing, f, indent=2)
+                    logger.info(f"[OUTBOUND] Campaign 'Connected' status written (row {lead_row_index})")
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"[OUTBOUND] Dial failed: {e}")
             import traceback; logger.error(traceback.format_exc())

@@ -545,7 +545,7 @@ export async function getCallDetails(id: string) {
   const logs = await getCallLogs();
   const log = logs.find((l: any) => l.id === id);
   
-  if (log && log.transcript && log.transcript.length > 50 && (!log.sentiment || log.sentiment === "Neutral" || log.summary.includes("missing"))) {
+  if (log && log.transcript && log.transcript.length > 50 && (!log.sentiment || log.sentiment === "Neutral" || log.summary?.includes("missing"))) {
     // Attempt to run Groq Analysis dynamically and cache it
     console.log("Triggering on-demand Groq Analysis for log:", id);
     const analysis = await analyzeTranscript(log.transcript);

@@ -668,8 +668,7 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
       </Section>
       )}
 
-      {/* Section 3: Resources / Knowledge Base — inbound only */}
-      {mode !== "outbound" && (
+      {/* Section 3: Resources / Knowledge Base */}
       <Section icon={Sparkles} title="Resources & Knowledge Base" subtitle="Add URLs, files, or text content as reference material for the AI" accentColor="cyan">
         {config.resources.length > 0 && (
           <div className="space-y-2">
@@ -775,7 +774,6 @@ export default function AgentConfigForm({ mode }: { mode: "inbound" | "outbound"
           </p>
         )}
       </Section>
-      )}
 
       {/* Section 4: Voice & Speech Settings — FULLY DYNAMIC */}
       <Section icon={Volume2} title="Voice & Speech Settings" subtitle="Text-to-speech and speech-to-text configuration" accentColor="green">

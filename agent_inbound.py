@@ -69,9 +69,9 @@ logger.info("[INBOUND] Agent initialized")
 # Pre-load VAD model at startup (avoids cold-load delay on first call)
 # Tuned for telephony: fast onset detection + tighter silence window
 _VAD = silero.VAD.load(
-    min_silence_duration=0.55,    # 550ms — matches natural phone conversation pauses
+    min_silence_duration=0.25,    # 250ms — aggressive silence detection for fastest response
     activation_threshold=0.35,    # Higher threshold to filter telephony line noise/static
-    min_speech_duration=0.25,     # 250ms minimum speech to register (filters DTMF/pops/breaths)
+    min_speech_duration=0.15,     # 150ms minimum speech to register (near-instant detection)
     sample_rate=16000,             # Match Deepgram's ingestion sample rate — no resampling overhead
 )
 
@@ -172,7 +172,7 @@ def _build_llm(ws_config: WorkspaceAgentConfig, provider_override: str = None):
                 api_key=gemini_key,
                 model=gemini_model,
                 temperature=float(os.getenv("GROQ_TEMPERATURE", str(ws_config.llm_temperature))),
-            )
+                )
             _patch_gemini_empty_response(llm_instance)
             return llm_instance
         logger.warning("[LLM] Google requested but no API key found — falling back to Groq")
@@ -185,7 +185,7 @@ def _build_llm(ws_config: WorkspaceAgentConfig, provider_override: str = None):
             return openai.LLM(
                 api_key=openai_key,
                 model=model,
-            )
+                )
         logger.warning("[LLM] OpenAI requested but OPENAI_API_KEY not set — falling back to Groq")
 
     # Last-resort fallback: Groq
@@ -540,25 +540,30 @@ def _do_http(req: urllib.request.Request, timeout: float = 5.0) -> str:
 # =============================================================================
 
 class InboundAssistant(Agent):
-    def __init__(self, ws_config: WorkspaceAgentConfig, tools: list, user_prompt: str = None, tts_language: str = None):
+    def __init__(self, ws_config: WorkspaceAgentConfig, tools: list, user_prompt: str = None, tts_language: str = None, rag_block: str = ""):
+        # Build instructions with KB-FIRST ordering so LLM prioritizes knowledge base
+        instructions = ""
+        if rag_block:
+            instructions += rag_block
+            logger.info(f"[INBOUND-RAG] ✅ RAG block prepended to instructions ({len(rag_block)} chars)")
         if user_prompt and user_prompt.strip():
-            instructions = (
-                f"{ws_config.system_prompt}\n\n"
+            instructions += (
+                f"\n\n{ws_config.system_prompt}\n\n"
                 f"## Additional Context for This Call:\n{user_prompt.strip()}"
             )
         else:
-            instructions = ws_config.system_prompt
+            instructions += ws_config.system_prompt
             
         # ── Telephony voice style prompt (latency optimization) ──
         instructions += (
-            "\n\n## TELEPHONY VOICE RULES (MANDATORY):\n"
+            "\n\n## TELEPHONY VOICE RULES (MANDATORY — SPEED IS CRITICAL):\n"
             "You are speaking on a live telephone call, NOT writing a chat message.\n"
-            "1. BREVITY: Your responses must be 1 or 2 short sentences MAX. Never use bullet points, numbered lists, or bold markdown.\n"
-            "2. FILLERS: Occasionally use natural fillers like 'Got it,' 'Sure,' 'Right,' or 'Let me check that for you' at the start of your responses.\n"
+            "1. EXTREME BREVITY: Your responses MUST be 1 short sentence MAX (under 15 words). "
+            "Two sentences only if absolutely necessary. NEVER use bullet points, numbered lists, or markdown.\n"
+            "2. FILLERS: Start with natural fillers like 'Got it,' 'Sure,' 'Right,' 'Let me check that for you.'\n"
             "3. TTS SAFETY: Never write symbols, dates, numbers, or currencies as digits. "
-            "Spell them out in words. Write 'five hundred rupees' not '₹500'. Write 'twelfth of May, twenty twenty-six' not '12/05/2026'. "
-            "Never use asterisks, hashtags, or any markdown formatting.\n"
-            "4. PACING: Speak in short clauses. Use commas and periods to create natural pauses.\n"
+            "Spell them out. Never use asterisks, hashtags, or markdown formatting.\n"
+            "4. SPEED: Respond as fast as possible. Short answers beat long explanations.\n"
         )
 
         instructions += (
@@ -571,16 +576,18 @@ class InboundAssistant(Agent):
         if tts_language and "en" not in tts_language.lower():
             instructions += f"\n\nCRITICAL: Your current target language is '{tts_language}'. You MUST speak entirely in this language code. Do NOT speak English."
 
-        instructions += (
-            "\n\nCRITICAL — HUMAN TRANSFER RULE (overrides everything else): "
-            "If the caller says ANYTHING like 'I want to talk to a person', 'connect me to someone', "
-            "'can I speak to a human', 'I don't want to talk to a bot', or any similar phrasing — "
-            "in ANY tone, calm or angry — you MUST immediately call `transfer_to_sales`. "
-            "Do NOT ask clarifying questions first. Do NOT offer alternatives first. "
-            "Just say 'Sure thing, one moment' and call the tool. "
-            "NEVER end the call without either calling `transfer_to_sales` or logging a callback. "
-            "Hanging up without transferring is never acceptable."
-        )
+        # Only inject the transfer rule if transfer_to_sales is enabled in config
+        if ws_config.is_function_enabled("transfer_to_sales"):
+            instructions += (
+                "\n\nCRITICAL — HUMAN TRANSFER RULE (overrides everything else): "
+                "If the caller says ANYTHING like 'I want to talk to a person', 'connect me to someone', "
+                "'can I speak to a human', 'I don't want to talk to a bot', or any similar phrasing — "
+                "in ANY tone, calm or angry — you MUST immediately call `transfer_to_sales`. "
+                "Do NOT ask clarifying questions first. Do NOT offer alternatives first. "
+                "Just say 'Sure thing, one moment' and call the tool. "
+                "NEVER end the call without either calling `transfer_to_sales` or logging a callback. "
+                "Hanging up without transferring is never acceptable."
+            )
 
         super().__init__(instructions=instructions, tools=tools)
         self._initial_greeting = ws_config.initial_greeting
@@ -643,6 +650,10 @@ async def entrypoint(ctx: agents.JobContext):
 
     if meta_system_prompt:
         ws_config.system_prompt = meta_system_prompt
+        # Re-append workspace resources that were baked into the original system_prompt
+        if ws_config.workspace_resources_text:
+            ws_config.system_prompt += ws_config.workspace_resources_text
+            logger.info(f"[INBOUND] Re-appended workspace resources ({len(ws_config.workspace_resources_text)} chars) after metadata override")
         logger.info(f"[INBOUND] Config override: system_prompt from metadata ({len(meta_system_prompt)} chars)")
     if meta_llm_model:
         ws_config.llm_model = meta_llm_model
@@ -691,15 +702,15 @@ async def entrypoint(ctx: agents.JobContext):
             turn_detection="vad",
             endpointing={
                 "mode": "dynamic",       # ADAPTIVE endpointing — matches each caller's pace
-                "min_delay": 0.3,        # 300ms minimum wait after silence
-                "max_delay": 2.0,        # 2s max before forcing turn close
+                "min_delay": 0.15,       # 150ms minimum wait after silence (near-instant response)
+                "max_delay": 0.8,        # 800ms max before forcing turn close (fastest turns)
             },
             interruption={
                 "enabled": True,
                 "mode": "vad",           # Use VAD mode (switch to "adaptive" if on LiveKit Cloud)
-                "min_duration": 0.5,     # 500ms minimum speech to register as interruption
+                "min_duration": 0.25,    # 250ms minimum speech to register as interruption (fastest barge-in)
                 "min_words": 1,          # Require at least 1 word before interrupting
-                "false_interruption_timeout": 2.0,  # Wait 2s before resuming after noise
+                "false_interruption_timeout": 1.0,  # 1s before resuming after noise (fastest recovery)
                 "resume_false_interruption": True,
             },
             preemptive_generation={
@@ -712,11 +723,38 @@ async def entrypoint(ctx: agents.JobContext):
     fnc_ctx.agent_session = session
 
     user_prompt = config_dict.get("user_prompt", "")
+    rag_content = config_dict.get("rag_content", "")
+
+    # Build RAG block with strong KB-first formatting
+    rag_block = ""
+    if rag_content and rag_content.strip():
+        rag_block = (
+            "\n\n══════════════════════════════════════════════════════════\n"
+            "CRITICAL — KNOWLEDGE BASE (YOU MUST USE THIS INFORMATION):\n"
+            "══════════════════════════════════════════════════════════\n"
+            "The following is your knowledge base. When the caller asks ANY question\n"
+            "about products, prices, features, specifications, availability, or details,\n"
+            "you MUST answer ONLY from this knowledge base. Do NOT make up information.\n"
+            "If the answer is in the knowledge base, use it. If not, say you'll check.\n"
+            "══════════════════════════════════════════════════════════\n\n"
+            + rag_content.strip()
+        )
+        logger.info(f"[INBOUND-RAG] ✅ RAG block built ({len(rag_block)} chars)")
+
+    # Filter out disabled custom functions (e.g. transfer_to_sales)
+    transfer_enabled = ws_config.is_function_enabled("transfer_to_sales")
+    logger.info(f"[INBOUND] transfer_to_sales enabled={transfer_enabled}")
+    available_tools = [
+        tool for name, tool in fnc_ctx.function_tools.items()
+        if transfer_enabled or name != "transfer_to_sales"
+    ]
+
     agent_instance = InboundAssistant(
         ws_config=ws_config,
-        tools=list(fnc_ctx.function_tools.values()),
+        tools=available_tools,
         user_prompt=user_prompt,
-        tts_language=config_dict.get("tts_language")
+        tts_language=config_dict.get("tts_language"),
+        rag_block=rag_block
     )
 
     call_transcript_messages = []

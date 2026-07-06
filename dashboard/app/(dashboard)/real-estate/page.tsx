@@ -794,6 +794,7 @@ Best Regards,
             body: JSON.stringify({
               phoneNumber: phone,
               systemPrompt: systemPrompt,
+              ragContent: buildRagContent(),
               leadName: name,
               leadEmail: email,
               leadData: lead,

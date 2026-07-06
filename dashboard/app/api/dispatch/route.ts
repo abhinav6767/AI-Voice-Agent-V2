@@ -126,6 +126,10 @@ export async function POST(request: Request) {
 
         console.log(`[DISPATCH] Step 1: Creating room ${roomName}`);
         console.log(`[DISPATCH] system_prompt length: ${systemPrompt.length} chars, override: ${overrideSystemPrompt}`);
+        console.log(`[DISPATCH] rag_content length: ${ragContent.length} chars`);
+        if (ragContent.length > 0) {
+            console.log(`[DISPATCH] rag_content preview: ${ragContent.substring(0, 200)}...`);
+        }
         if (systemPrompt.length > 0) {
             console.log(`[DISPATCH] system_prompt preview: ${systemPrompt.substring(0, 200)}...`);
         }
